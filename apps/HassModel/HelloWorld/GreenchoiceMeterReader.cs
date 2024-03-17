@@ -52,12 +52,12 @@ public class GreenchoiceMeterReader
         //scheduler.RunIn(TimeSpan.FromSeconds(1), Test);
 
 
-        //var next5AM = (DateTimeOffset.Now.Hour > 5 ? DateTimeOffset.Now.AddDays(1).Date : DateTimeOffset.Now.Date).AddHours(5);
-        //scheduler.RunEvery(TimeSpan.FromHours(24), next5AM.AddMinutes(5), () =>
-        //{
-        //    if (DateTimeOffset.Now.Hour == 5) // Don't know if needed, want to protect against false triggers at wrong time
-        //        Test();
-        //});
+        var next5AM = (DateTimeOffset.Now.Hour > 5 ? DateTimeOffset.Now.AddDays(1).Date : DateTimeOffset.Now.Date).AddHours(5);
+        scheduler.RunEvery(TimeSpan.FromHours(24), next5AM.AddMinutes(5), () =>
+        {
+            if (DateTimeOffset.Now.Hour == 5) // Don't know if needed, want to protect against false triggers at wrong time
+                Test();
+        });
     }
 
     struct TotalCounters
@@ -193,46 +193,54 @@ public class GreenchoiceMeterReader
         {
             // The time of the reading, is the time of when the change was detected.
             // So usage at 08:10 is logged in the 09 timespan. So we want to log into previous hour
+            //!! The above is only for gas usage...
+            // Using electricity at 08:10 shows up in 08:00 reading
+            // Using gas at 08:10 shows up in 09:00 reading.. wow
 
-            var measureTime = keyValuePair.First.Key
+            var measureTimeElec = keyValuePair.First.Key
+                    .AddHours(1)
                     .AddSeconds(-1)
                 ; // log it at end of the hour
+
+            var measureTimeGas = keyValuePair.First.Key
+                    .AddSeconds(-1)
+                ; // log it at end of the previous hour
 
             var elecRead = keyValuePair.First.Value;
             var gasRead = keyValuePair.Second.Value;
 
 
             accumulatedElecHigh += elecRead.consumptionHigh;
-            stateElecHigh.Update(accumulatedElecHigh.ToString("F", CultureInfo.InvariantCulture), measureTime);
+            stateElecHigh.Update(accumulatedElecHigh.ToString("F", CultureInfo.InvariantCulture), measureTimeElec);
             _ha.SendEvent("state_changed", stateElecHigh);
 
             accumulatedElecLow += elecRead.consumptionLow;
-            stateElecLow.Update(accumulatedElecLow.ToString("F", CultureInfo.InvariantCulture), measureTime);
+            stateElecLow.Update(accumulatedElecLow.ToString("F", CultureInfo.InvariantCulture), measureTimeElec);
             _ha.SendEvent("state_changed", stateElecLow);
 
             accumulatedElecTotal += elecRead.consumptionTotal;
-            stateElecTotal.Update(accumulatedElecTotal.ToString("F", CultureInfo.InvariantCulture), measureTime);
+            stateElecTotal.Update(accumulatedElecTotal.ToString("F", CultureInfo.InvariantCulture), measureTimeElec);
             _ha.SendEvent("state_changed", stateElecTotal);
 
             accumulatedGasTotal += gasRead.consumptionTotal;
-            stateGasTotal.Update(accumulatedGasTotal.ToString("F", CultureInfo.InvariantCulture), measureTime);
+            stateGasTotal.Update(accumulatedGasTotal.ToString("F", CultureInfo.InvariantCulture), measureTimeGas);
             _ha.SendEvent("state_changed", stateGasTotal);
 
 
             accumulatedCostElecHigh += elecRead.costsHigh;
-            stateCostElecHigh.Update(accumulatedCostElecHigh.ToString("F", CultureInfo.InvariantCulture), measureTime);
+            stateCostElecHigh.Update(accumulatedCostElecHigh.ToString("F", CultureInfo.InvariantCulture), measureTimeElec);
             _ha.SendEvent("state_changed", stateCostElecHigh);
 
             accumulatedCostElecLow += elecRead.costsLow;
-            stateCostElecLow.Update(accumulatedCostElecLow.ToString("F", CultureInfo.InvariantCulture), measureTime);
+            stateCostElecLow.Update(accumulatedCostElecLow.ToString("F", CultureInfo.InvariantCulture), measureTimeElec);
             _ha.SendEvent("state_changed", stateCostElecLow);
 
             accumulatedCostElecTotal += elecRead.costsTotal;
-            stateCostElecTotal.Update(accumulatedCostElecTotal.ToString("F", CultureInfo.InvariantCulture), measureTime);
+            stateCostElecTotal.Update(accumulatedCostElecTotal.ToString("F", CultureInfo.InvariantCulture), measureTimeElec);
             _ha.SendEvent("state_changed", stateCostElecTotal);
 
             accumulatedCostGasTotal += gasRead.costsTotal;
-            stateCostGasTotal.Update(accumulatedCostGasTotal.ToString("F", CultureInfo.InvariantCulture), measureTime);
+            stateCostGasTotal.Update(accumulatedCostGasTotal.ToString("F", CultureInfo.InvariantCulture), measureTimeGas);
             _ha.SendEvent("state_changed", stateCostGasTotal);
         }
 
