@@ -22,7 +22,6 @@ namespace HassModel;
 ///     Hello world showcase using the new HassModel API
 /// </summary>
 [NetDaemonApp]
-[Focus]
 public class GreenchoiceMeterReader
 {
     private readonly IHaContext _ha;

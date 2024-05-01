@@ -3,6 +3,10 @@ This is the project template for binary deploy. This allows you to build a binar
 
 This is generated using NetDaemon runtime version 3.1 and .NET 7.
 
+Contains
+- Greenchoice meter reading
+- KPN Unlimited contract, reading how much data is used/available, and automatically "purchasing" free 2Gb extensions
+
 
 AppSettings json
 
@@ -36,6 +40,12 @@ AppSettings json
   "Greenchoice": {
     "Username": "XXXX email here",
     "Password": "XXXX"
+  },
+  "KPN": {
+    "Username": "XXXX email here",
+    "Password": "XXXX",
+    "Number": "Contract phone number",
+    "SubscriptionPlanId":"Subscription plan ID (get it some way, no time to explain)"
   }
 }
 
