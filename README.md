@@ -45,7 +45,8 @@ AppSettings json
     "Username": "XXXX email here",
     "Password": "XXXX",
     "Number": "Contract phone number",
-    "SubscriptionPlanId":"Subscription plan ID (get it some way, no time to explain)"
+    "SubscriptionPlanId":"Subscription plan ID (get it some way, no time to explain)",
+    "SomeHashThing": "Find it from mijnkpnpref cookie, the first hash value in there before mobile number"
   }
 }
 

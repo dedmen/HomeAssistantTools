@@ -36,7 +36,8 @@ namespace KPNAPIPoll
             cookies.Add(new Cookie("mijnkpnapp_locale", "en", "/", domain: "kpn.com"));
             cookies.Add(new Cookie("mijnkpnapp_colorscheme", "light", "/", domain: "kpn.com"));
             cookies.Add(new Cookie("mijnkpnauth", "1", "/", "mijn.kpn.com"));
-            //cookies.Add(new Cookie("mijnkpnpref", $"{{\"XXXX what is this\":{{\"mobileNumber\":\"{Convert.ToHexString(MD5.HashData(Encoding.ASCII.GetBytes(_cfg["KPN:Number"]))).ToLower()}\"}}}}", "/", "mijn.kpn.com"));
+            // Don't know what this is, its some MD5 hash, not the login name, maybe some device identifier. Not setting this triggers "login from new device" E-Mails to be sent
+            cookies.Add(new Cookie("mijnkpnpref", $"{{\"{_cfg["KPN:SomeHashThing"]}\":{{\"mobileNumber\":\"{Convert.ToHexString(MD5.HashData(Encoding.ASCII.GetBytes(_cfg["KPN:Number"]))).ToLower()}\"}}}}", "/", "mijn.kpn.com"));
         }
 
         void Log(string message)
