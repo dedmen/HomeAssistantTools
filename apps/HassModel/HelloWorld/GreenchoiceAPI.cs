@@ -56,6 +56,10 @@ namespace HomeAssistantNetDaemon.apps.HassModel.HelloWorld
         {
             var resultLoginPage = await _client.GetAsync(new Uri(BaseUrl));
 
+            if (resultLoginPage.StatusCode == HttpStatusCode.OK)
+            {
+                return; // Already logged in
+            }
             // Login gets redirected, and URL contains the returnUrl that we need.
             // Also body contains the __RequestVerificationToken that we need to extract from the login form
 
@@ -176,7 +180,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.HelloWorld
             public struct CustomerData
             {
                 public ulong customerNumber { get; set; }
-                public ulong contractId { get; set; }
+                public ulong agreementId { get; set; }
             }
 
             public CustomerData subject { get; set; }
@@ -231,7 +235,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.HelloWorld
             // https://mijn.greenchoice.nl/api/v2/MeterReadings/2024/{customerNumber}/{contractId}
 
             var prefs = JsonSerializer.Deserialize<CustomerPreferences>(await JsonGet(new Uri("https://mijn.greenchoice.nl/api/v2/Preferences")));
-            var readings = JsonSerializer.Deserialize<MeterReadings>(await JsonGet(new Uri($"https://mijn.greenchoice.nl/api/v2/MeterReadings/{date.Year}/{prefs.subject.customerNumber}/{prefs.subject.contractId}")));
+            var readings = JsonSerializer.Deserialize<MeterReadings>(await JsonGet(new Uri($"https://mijn.greenchoice.nl/api/v2/MeterReadings/{date.Year}/{prefs.subject.customerNumber}/{prefs.subject.agreementId}")));
             return readings;
         }
 
