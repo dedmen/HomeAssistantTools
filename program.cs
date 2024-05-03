@@ -5,6 +5,7 @@ using NetDaemon.Extensions.MqttEntityManager;
 using NetDaemon.Extensions.Scheduler;
 using NetDaemon.Extensions.Tts;
 using NetDaemon.Runtime;
+using HomeAssistantNetDaemon;
 // Add next line if using code generator
 //using HomeAssistantGenerated;
 
@@ -14,9 +15,9 @@ try
 {
     await Host.CreateDefaultBuilder(args)
         .UseNetDaemonAppSettings()
-        .UseNetDaemonDefaultLogging()
+        //.UseNetDaemonDefaultLogging()
+        .UseCustomLogging()
         .UseNetDaemonRuntime()
-        .UseNetDaemonTextToSpeech()
         .UseNetDaemonMqttEntityManagement()
         .ConfigureServices((_, services) =>
             services
