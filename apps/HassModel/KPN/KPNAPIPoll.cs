@@ -15,11 +15,11 @@ using System.Threading.Tasks;
 namespace HomeAssistantNetDaemon.apps.HassModel.KPN
 {
     [NetDaemonApp]
-    [Focus]
     class KPNAPIPoll
     {
         private readonly IHaContext _ha;
         private readonly IMqttEntityManager _entityManager;
+        private readonly INetDaemonScheduler _scheduler;
         private KPNRequester _kr;
         private KPNRequester.ProductEntry _productEntry;
 
@@ -27,16 +27,39 @@ namespace HomeAssistantNetDaemon.apps.HassModel.KPN
         {
             _ha = ha;
             _entityManager = entityManager;
+            _scheduler = scheduler;
             _kr = new KPNRequester(cfg);
             _kr.DoLogin();
-            _productEntry = _kr.GetProducts();
 
-            //StartSetup();
-            CheckLimits();
-            scheduler.RunEvery(TimeSpan.FromMinutes(30), () =>
+            StartSetup();
+            InitProductEntry();
+            _scheduler.RunEvery(TimeSpan.FromMinutes(30), () =>
             {
+                if (string.IsNullOrEmpty(_productEntry.id))
+                {
+                    InitProductEntry();
+                    return;
+                }
+
                 CheckLimits();
             });
+        }
+
+        void InitProductEntry()
+        {
+            try
+            {
+                _productEntry = _kr.GetProducts();
+                CheckLimits();
+            }
+            catch (System.InvalidOperationException ex)
+            {
+                Console.WriteLine(ex.Message);
+                //Thread.Sleep(30000);
+
+                _scheduler.RunIn(TimeSpan.FromMinutes(5), InitProductEntry);
+                // try again
+            }
         }
 
         private async void CheckLimits()
@@ -102,7 +125,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.KPN
             {
                 unit_of_measurement = "GiB",
                 icon = "mdi:transmission-tower-export",
-                state_class = "total_increasing",
+                state_class = "measurement",
                 value_template = "{{ value_json.data_used }}",
 
                 state_topic = stateTopic, // Note the override of the state topic
@@ -113,20 +136,20 @@ namespace HomeAssistantNetDaemon.apps.HassModel.KPN
             {
                 unit_of_measurement = "GiB",
                 icon = "mdi:transmission-tower-import",
-                state_class = "total_increasing",
+                state_class = "measurement",
                 value_template = "{{ value_json.data_avail }}", // and value from state
 
                 state_topic = stateTopic, // Note the override of the state topic
                 device // Links the sensors together
             });
 
-            var newState = new
-            {
-                data_used = 0,
-                data_avail = 0
-            };
-
-            await _entityManager.SetStateAsync("sensor.kpn", JsonSerializer.Serialize(newState));
+            //var newState = new
+            //{
+            //    data_used = 0,
+            //    data_avail = 0
+            //};
+            //
+            //await _entityManager.SetStateAsync("sensor.kpn", JsonSerializer.Serialize(newState));
         }
 
 
