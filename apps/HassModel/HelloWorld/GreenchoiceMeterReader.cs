@@ -51,7 +51,7 @@ public class GreenchoiceMeterReader
 
         //scheduler.RunIn(TimeSpan.FromSeconds(0.2), () => StartSetup(DateTime.Now.Date.AddDays(-60)));
         //scheduler.RunIn(TimeSpan.FromSeconds(5), NewState);
-        //scheduler.RunIn(TimeSpan.FromSeconds(5), Test);
+        scheduler.RunIn(TimeSpan.FromSeconds(5), Test);
 
         // This doesn't work, it spams requests, and it also doesn't reliably trigger at the 5th hour
         //var next5AM = (DateTimeOffset.Now.Hour > 5 ? DateTimeOffset.Now.AddDays(1).Date : DateTimeOffset.Now.Date).AddHours(5);
@@ -158,7 +158,7 @@ public class GreenchoiceMeterReader
 
     private async void Test()
     {
-        var meterReadings = await _gc.FetchMeterReadings(DateTimeOffset.Now.Date.AddDays(-1));
+        var meterReadings = await _gc.FetchMeterReadings(DateTimeOffset.Now.Date.AddDays(-2));
 
         // Seed code
         //for (int i = -34; i < -1; i++)
@@ -167,7 +167,7 @@ public class GreenchoiceMeterReader
         //    await Task.Delay(5000);
         //}
 
-        await FetchDay(meterReadings, DateTimeOffset.Now.Date.AddDays(-1));
+        await FetchDay(meterReadings, DateTimeOffset.Now.Date.AddDays(-2));
     }
 
     private async Task FetchDay(MeterReadings meterReadings, DateTime fetchDate)
