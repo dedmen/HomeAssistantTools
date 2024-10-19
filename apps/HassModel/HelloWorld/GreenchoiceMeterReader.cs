@@ -54,21 +54,21 @@ public class GreenchoiceMeterReader
         //scheduler.RunIn(TimeSpan.FromSeconds(5), Test);
 
         // This doesn't work, it spams requests, and it also doesn't reliably trigger at the 5th hour
-        var next5AM = (DateTimeOffset.Now.Hour > 5 ? DateTimeOffset.Now.AddDays(1).Date : DateTimeOffset.Now.Date).AddHours(5);
-        scheduler.RunEvery(TimeSpan.FromHours(24), next5AM.AddMinutes(5), () =>
-        {
-            if (lastTrigger.Date == DateTime.Now.Date)
-                return; // Multiple triggers on same day?
-
-            if (DateTimeOffset.Now.Hour == 5) // Don't know if needed, want to protect against false triggers at wrong time
-                Test();
-        });
-
-        //ha.RegisterServiceCallBack<object>("TriggerGreenchoiceMeterReader", a =>
+        //var next5AM = (DateTimeOffset.Now.Hour > 5 ? DateTimeOffset.Now.AddDays(1).Date : DateTimeOffset.Now.Date).AddHours(5);
+        //scheduler.RunEvery(TimeSpan.FromHours(24), next5AM.AddMinutes(5), () =>
         //{
-        //    Console.WriteLine("Run Greenchoice meters");
-        //    Test();
+        //    if (lastTrigger.Date == DateTime.Now.Date)
+        //        return; // Multiple triggers on same day?
+        //
+        //    if (DateTimeOffset.Now.Hour == 5) // Don't know if needed, want to protect against false triggers at wrong time
+        //        Test();
         //});
+
+        ha.RegisterServiceCallBack<object>("TriggerGreenchoiceMeterReader", a =>
+        {
+            Console.WriteLine("Run Greenchoice meters");
+            Test();
+        });
     }
 
     struct TotalCounters
