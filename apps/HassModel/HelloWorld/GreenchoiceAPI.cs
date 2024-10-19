@@ -3,6 +3,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Diagnostics.Contracts;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -77,6 +78,15 @@ namespace HomeAssistantNetDaemon.apps.HassModel.HelloWorld
 
             // https://sso.greenchoice.nl/Account/Login?ReturnUrl=
 
+            _client.DefaultRequestHeaders.Add("Origin", "null");
+            _client.DefaultRequestHeaders.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+            _client.DefaultRequestHeaders.Add("Pragma", "no-cache");
+            _client.DefaultRequestHeaders.Add("Sec-Fetch-Dest", "document");
+            _client.DefaultRequestHeaders.Add("Sec-Fetch-Mode", "navigate");
+            _client.DefaultRequestHeaders.Add("Sec-Fetch-Site", "same-origin");
+            _client.DefaultRequestHeaders.Add("Sec-Fetch-User", "?1");
+            _client.DefaultRequestHeaders.Add("TB", "trailers");
+
             var loginResult = await _client.PostAsync(resultLoginPage.RequestMessage.RequestUri, new FormUrlEncodedContent(new[]
             {
                 new KeyValuePair<string, string>("ReturnUrl", returnUrl),
@@ -85,6 +95,8 @@ namespace HomeAssistantNetDaemon.apps.HassModel.HelloWorld
                 new KeyValuePair<string, string>("RememberLogin", "false"),
                 new KeyValuePair<string, string>("__RequestVerificationToken", RequestVeriToken)
             }));
+
+            _client.DefaultRequestHeaders.Clear();
 
 
             while (loginResult.StatusCode == HttpStatusCode.Found)
@@ -192,8 +204,8 @@ namespace HomeAssistantNetDaemon.apps.HassModel.HelloWorld
             {
                 public enum ProductTypeEnum
                 {
-                    Stroom,
-                    Gas
+                    Stroom, // kWh
+                    Gas // m3
                 }
 
                 public string productType { get; set; }
@@ -233,9 +245,10 @@ namespace HomeAssistantNetDaemon.apps.HassModel.HelloWorld
         {
             // https://mijn.greenchoice.nl/api/v2/Preferences // Returns {"accountId":"XXXX","subject":{"customerNumber":XXX,"contractId":XXXX}}
             // https://mijn.greenchoice.nl/api/v2/MeterReadings/2024/{customerNumber}/{contractId}
+            // https://mijn.greenchoice.nl/api/v2/customers/{customerNumber}/agreements/{contractId}/meter-readings/{date.Year}
 
             var prefs = JsonSerializer.Deserialize<CustomerPreferences>(await JsonGet(new Uri("https://mijn.greenchoice.nl/api/v2/Preferences")));
-            var readings = JsonSerializer.Deserialize<MeterReadings>(await JsonGet(new Uri($"https://mijn.greenchoice.nl/api/v2/MeterReadings/{date.Year}/{prefs.subject.customerNumber}/{prefs.subject.agreementId}")));
+            var readings = JsonSerializer.Deserialize<MeterReadings>(await JsonGet(new Uri($"https://mijn.greenchoice.nl/api/v2/customers/{prefs.subject.customerNumber}/agreements/{prefs.subject.agreementId}/meter-readings/{date.Year}")));
             return readings;
         }
 
