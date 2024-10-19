@@ -92,7 +92,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.HelloWorld
                 new KeyValuePair<string, string>("ReturnUrl", returnUrl),
                 new KeyValuePair<string, string>("Username", _cfg["Greenchoice:Username"]),
                 new KeyValuePair<string, string>("Password", _cfg["Greenchoice:Password"]),
-                new KeyValuePair<string, string>("RememberLogin", "false"),
+                new KeyValuePair<string, string>("RememberLogin", "true"),
                 new KeyValuePair<string, string>("__RequestVerificationToken", RequestVeriToken)
             }));
 

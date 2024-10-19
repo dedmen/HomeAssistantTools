@@ -15,6 +15,7 @@ using System.Threading.Tasks;
 using System;
 using Microsoft.Extensions.Configuration;
 using static HomeAssistantNetDaemon.apps.HassModel.HelloWorld.GreenchoiceAPI;
+using NetDaemon.HassModel.Integration;
 
 namespace HassModel;
 
@@ -22,11 +23,13 @@ namespace HassModel;
 ///     Hello world showcase using the new HassModel API
 /// </summary>
 [NetDaemonApp]
+[Focus]
 public class GreenchoiceMeterReader
 {
     private readonly IHaContext _ha;
     private readonly IMqttEntityManager _entityManager;
     private GreenchoiceAPI _gc;
+    private DateTimeOffset lastTrigger = DateTimeOffset.MinValue;
 
     public GreenchoiceMeterReader(IHaContext ha, IMqttEntityManager entityManager, INetDaemonScheduler scheduler, IConfiguration cfg)
     {
@@ -48,15 +51,24 @@ public class GreenchoiceMeterReader
 
         //scheduler.RunIn(TimeSpan.FromSeconds(0.2), () => StartSetup(DateTime.Now.Date.AddDays(-60)));
         //scheduler.RunIn(TimeSpan.FromSeconds(5), NewState);
-        //scheduler.RunIn(TimeSpan.FromSeconds(1), Test);
+        //scheduler.RunIn(TimeSpan.FromSeconds(5), Test);
 
-
+        // This doesn't work, it spams requests, and it also doesn't reliably trigger at the 5th hour
         var next5AM = (DateTimeOffset.Now.Hour > 5 ? DateTimeOffset.Now.AddDays(1).Date : DateTimeOffset.Now.Date).AddHours(5);
         scheduler.RunEvery(TimeSpan.FromHours(24), next5AM.AddMinutes(5), () =>
         {
+            if (lastTrigger.Date == DateTime.Now.Date)
+                return; // Multiple triggers on same day?
+
             if (DateTimeOffset.Now.Hour == 5) // Don't know if needed, want to protect against false triggers at wrong time
                 Test();
         });
+
+        //ha.RegisterServiceCallBack<object>("TriggerGreenchoiceMeterReader", a =>
+        //{
+        //    Console.WriteLine("Run Greenchoice meters");
+        //    Test();
+        //});
     }
 
     struct TotalCounters
