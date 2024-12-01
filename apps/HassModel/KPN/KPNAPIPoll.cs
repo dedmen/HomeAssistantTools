@@ -29,9 +29,27 @@ namespace HomeAssistantNetDaemon.apps.HassModel.KPN
             _entityManager = entityManager;
             _scheduler = scheduler;
             _kr = new KPNRequester(cfg);
-            _kr.DoLogin();
+            InitLogin();
+        }
 
+        private void InitLogin()
+        {
             StartSetup();
+
+            try
+            {
+                _kr.DoLogin();
+            }
+            catch (System.Net.WebException ex) // Resource temporarily unavailable
+            {
+                Console.WriteLine(ex.Message);
+                //Thread.Sleep(30000);
+
+                // try again
+                _scheduler.RunIn(TimeSpan.FromMinutes(5), InitLogin);
+                return;
+            }
+
             InitProductEntry();
             _scheduler.RunEvery(TimeSpan.FromMinutes(30), () =>
             {
@@ -57,8 +75,8 @@ namespace HomeAssistantNetDaemon.apps.HassModel.KPN
                 Console.WriteLine(ex.Message);
                 //Thread.Sleep(30000);
 
-                _scheduler.RunIn(TimeSpan.FromMinutes(5), InitProductEntry);
                 // try again
+                _scheduler.RunIn(TimeSpan.FromMinutes(5), InitProductEntry);
             }
         }
 

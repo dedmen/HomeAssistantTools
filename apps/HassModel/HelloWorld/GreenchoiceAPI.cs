@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Configuration;
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -14,6 +14,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Xml.Linq;
+using static HomeAssistantNetDaemon.apps.HassModel.HelloWorld.GreenchoiceAPI.MeterReadings;
 
 namespace HomeAssistantNetDaemon.apps.HassModel.HelloWorld
 {
@@ -248,7 +249,11 @@ namespace HomeAssistantNetDaemon.apps.HassModel.HelloWorld
             // https://mijn.greenchoice.nl/api/v2/customers/{customerNumber}/agreements/{contractId}/meter-readings/{date.Year}
 
             var prefs = JsonSerializer.Deserialize<CustomerPreferences>(await JsonGet(new Uri("https://mijn.greenchoice.nl/api/v2/Preferences")));
-            var readings = JsonSerializer.Deserialize<MeterReadings>(await JsonGet(new Uri($"https://mijn.greenchoice.nl/api/v2/customers/{prefs.subject.customerNumber}/agreements/{prefs.subject.agreementId}/meter-readings/{date.Year}")));
+            var readings =
+                new MeterReadings
+                {
+                    productTypes = JsonSerializer.Deserialize<List<ProductType>>(await JsonGet(new Uri($"https://mijn.greenchoice.nl/api/v2/customers/{prefs.subject.customerNumber}/agreements/{prefs.subject.agreementId}/meter-readings/{date.Year}")))
+                };
             return readings;
         }
 
