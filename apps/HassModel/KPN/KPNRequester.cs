@@ -87,7 +87,7 @@ namespace KPNAPIPoll
                             using (StreamReader sr = new StreamReader(getResponse.GetResponseStream()))
                             {
                                 var result = sr.ReadToEnd();//Read logged in webpage
-                                Console.WriteLine(result);
+                                //Console.WriteLine(result);
 
                                 var res = JsonSerializer.Deserialize<selfcareProductUsageDTO>(result);
 
@@ -156,7 +156,7 @@ namespace KPNAPIPoll
                         using (StreamReader sr = new StreamReader(getResponse.GetResponseStream()))
                         {
                             var result = sr.ReadToEnd();//Read logged in webpage
-                            Console.WriteLine(result);
+                            //Console.WriteLine(result);
 
                             var res = JsonSerializer.Deserialize<selfcareProductsDTO>(result);
 
@@ -270,7 +270,7 @@ namespace KPNAPIPoll
                         {
                             var result = sr.ReadToEnd();//Read logged in webpage
 
-                            Console.WriteLine(result);
+                            //Console.WriteLine(result);
                         }
                     }
                 }
