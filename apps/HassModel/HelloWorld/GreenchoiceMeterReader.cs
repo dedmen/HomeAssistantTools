@@ -85,6 +85,8 @@ public class GreenchoiceMeterReader
         //public float gasLow { get; set; } // There is no gas low it seems, so it doesn't matter
         public double gasTotal { get; set; }
         public double gasCostsTotal { get; set; }
+
+        public DateTime counterTime { get; set; }
     }
 
     private TotalCounters GetLastTotalCounters(GreenchoiceAPI.MeterReadings meterReadings, DateTime currentDate) // DateTime.Now.AddDays(-1)
@@ -93,7 +95,12 @@ public class GreenchoiceMeterReader
         {
             var fileContents = File.ReadAllText("apps/GreenchoiceCounters.json");
             var counters = JsonSerializer.Deserialize<TotalCounters>(fileContents);
-            return counters;
+
+            // Ignore saved data, if its older than one day. That means we didn't save it yesterday
+            if (counters.counterTime > currentDate.AddDays(-1).Date)
+                return counters;
+            else
+                Console.WriteLine($"Greenchoice ignoring last counters, out of date {counters.counterTime} vs {currentDate}");
         }
         catch (Exception ex)
         {
@@ -327,7 +334,8 @@ public class GreenchoiceMeterReader
             elecCostsHigh = accumulatedCostElecHigh,
             elecCostsLow = accumulatedCostElecLow,
             elecCostsTotal = accumulatedCostElecTotal,
-            gasCostsTotal = accumulatedCostGasTotal
+            gasCostsTotal = accumulatedCostGasTotal,
+            counterTime = fetchDate
         };
 
         SetLastTotalCounters(newTotals);
@@ -405,7 +413,7 @@ public class GreenchoiceMeterReader
 
         await _entityManager.CreateAsync("sensor.greenchoice_electricity_cost_high", new EntityCreationOptions { Name = "Electricity Cost High", DeviceClass = "monetary", }, new
         {
-            unit_of_measurement = "€",
+            unit_of_measurement = "ï¿½",
             icon = "mdi:currency-eur",
             state_class = "total",
             value_template = "{{ value_json.electricity_cost_high }}", // and value from state
@@ -414,7 +422,7 @@ public class GreenchoiceMeterReader
         });
         await _entityManager.CreateAsync("sensor.greenchoice_electricity_cost_low", new EntityCreationOptions { Name = "Electricity Cost Low", DeviceClass = "monetary", }, new
         {
-            unit_of_measurement = "€",
+            unit_of_measurement = "ï¿½",
             icon = "mdi:currency-eur",
             state_class = "total",
             value_template = "{{ value_json.electricity_cost_low }}", // and value from state
@@ -423,7 +431,7 @@ public class GreenchoiceMeterReader
         });
         await _entityManager.CreateAsync("sensor.greenchoice_electricity_cost_total", new EntityCreationOptions { Name = "Electricity Cost Total", DeviceClass = "monetary", }, new
         {
-            unit_of_measurement = "€",
+            unit_of_measurement = "ï¿½",
             icon = "mdi:currency-eur",
             state_class = "total",
             value_template = "{{ value_json.electricity_cost_total }}", // and value from state
@@ -434,7 +442,7 @@ public class GreenchoiceMeterReader
 
         await _entityManager.CreateAsync("sensor.greenchoice_gas_cost_total", new EntityCreationOptions { Name = "Gas Cost Total", DeviceClass = "monetary", }, new
         {
-            unit_of_measurement = "€",
+            unit_of_measurement = "ï¿½",
             icon = "mdi:currency-eur",
             state_class = "total",
             value_template = "{{ value_json.gas_cost_total }}", // and value from state

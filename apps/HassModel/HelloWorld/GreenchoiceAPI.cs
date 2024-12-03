@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Configuration;
+﻿using Microsoft.Extensions.Configuration;
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -71,11 +71,18 @@ namespace HomeAssistantNetDaemon.apps.HassModel.HelloWorld
             }
 
 
-
             var content = await resultLoginPage.Content.ReadAsStringAsync();
 
             var returnUrl = HtmlGetInputValue(content, "ReturnUrl");
             var RequestVeriToken = HtmlGetInputValue(content, "__RequestVerificationToken");
+
+            if (string.IsNullOrEmpty(returnUrl))
+            {
+                Console.WriteLine("Failed to get return URL from content");
+                Console.WriteLine(resultLoginPage.StatusCode);
+                Console.WriteLine(content);
+                return;
+            }
 
             // https://sso.greenchoice.nl/Account/Login?ReturnUrl=
 
@@ -107,6 +114,12 @@ namespace HomeAssistantNetDaemon.apps.HassModel.HelloWorld
             }
             
             // The post will 302 redirect us to the ReturnUrl and pass parameters in the URL
+
+            if (loginResult.StatusCode == HttpStatusCode.BadRequest)
+            {
+                Console.WriteLine("Greenchoice login BadRequest to sso target uri");
+                Console.WriteLine(loginResult.RequestMessage.ToString());
+            }
 
             // Exchange oidc parameters for login cookie
             content = await loginResult.Content.ReadAsStringAsync();
