@@ -1,4 +1,4 @@
-﻿using HomeAssistantNetDaemon.apps.HassModel.HelloWorld;
+using HomeAssistantNetDaemon.apps.HassModel.HelloWorld;
 using KPNAPIPoll;
 using Microsoft.Extensions.Configuration;
 using NetDaemon.Extensions.MqttEntityManager;
@@ -95,10 +95,9 @@ namespace HomeAssistantNetDaemon.apps.HassModel.KPN
 
             await _entityManager.SetStateAsync("sensor.kpn", JsonSerializer.Serialize(newState));
 
-            Console.WriteLine($"Avail {availableData} - Used {usedData}");
-
             var remainingData = availableData - usedData;
-            Console.WriteLine($"Remaining GBs {remainingData}");
+
+            Console.WriteLine($"[{DateTime.Now}] Avail {availableData} - Used {usedData} - Remaining GBs {remainingData}");
 
             const float desiredSpareData = 12;
             const float dataPerOrder = 2; // 2gb per bundle order

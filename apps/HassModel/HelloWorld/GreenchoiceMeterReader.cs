@@ -51,7 +51,7 @@ public class GreenchoiceMeterReader
 
         //scheduler.RunIn(TimeSpan.FromSeconds(0.2), () => StartSetup(DateTime.Now.Date.AddDays(-60)));
         //scheduler.RunIn(TimeSpan.FromSeconds(5), NewState);
-        scheduler.RunIn(TimeSpan.FromSeconds(5), Test);
+        //scheduler.RunIn(TimeSpan.FromSeconds(5), Test);
 
         // This doesn't work, it spams requests, and it also doesn't reliably trigger at the 5th hour
         //var next5AM = (DateTimeOffset.Now.Hour > 5 ? DateTimeOffset.Now.AddDays(1).Date : DateTimeOffset.Now.Date).AddHours(5);
@@ -66,9 +66,11 @@ public class GreenchoiceMeterReader
 
         ha.RegisterServiceCallBack<object>("TriggerGreenchoiceMeterReader", a =>
         {
-            Console.WriteLine("Run Greenchoice meters");
+            Console.WriteLine($"[{DateTime.Now}] Run Greenchoice meters");
             Test();
         });
+
+       //Test();
     }
 
     struct TotalCounters
@@ -97,7 +99,7 @@ public class GreenchoiceMeterReader
             var counters = JsonSerializer.Deserialize<TotalCounters>(fileContents);
 
             // Ignore saved data, if its older than one day. That means we didn't save it yesterday
-            if (counters.counterTime > currentDate.AddDays(-1).Date)
+            if (counters.counterTime >= currentDate.AddDays(-1).Date)
                 return counters;
             else
                 Console.WriteLine($"Greenchoice ignoring last counters, out of date {counters.counterTime} vs {currentDate}");
@@ -179,6 +181,8 @@ public class GreenchoiceMeterReader
 
     private async Task FetchDay(MeterReadings meterReadings, DateTime fetchDate)
     {
+        //#TODO Add a file that stores all successfully fetched days, so when we run it again it doesn't overwrite days that are already present.
+        // If previous day is already present, we can also use it as last totals. Makes it easier to fill in gaps. We can also find gaps afterwards
         var lastTotalCounters = GetLastTotalCounters(meterReadings, fetchDate.Date);
 
         var fetchedData = await _gc.Fetch(fetchDate.Date, fetchDate.Date.AddDays(1)); // From yesterday 00:00 to today 00:00

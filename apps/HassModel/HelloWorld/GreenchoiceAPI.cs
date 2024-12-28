@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Configuration;
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -12,6 +12,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Xml.Linq;
 using static HomeAssistantNetDaemon.apps.HassModel.HelloWorld.GreenchoiceAPI.MeterReadings;
@@ -109,6 +110,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.HelloWorld
 
             while (loginResult.StatusCode == HttpStatusCode.Found)
             {
+                Thread.Sleep(1000);
                 var newTarget = new Uri("https://sso.greenchoice.nl/" + loginResult.Headers.Location.OriginalString.Replace("&amp;", "&"));
                 loginResult = await _client.GetAsync(newTarget);
             }
@@ -124,6 +126,11 @@ namespace HomeAssistantNetDaemon.apps.HassModel.HelloWorld
             // Exchange oidc parameters for login cookie
             content = await loginResult.Content.ReadAsStringAsync();
 
+            if (content.Contains("Sorry, er is een technisch probleem"))
+            {
+                Console.WriteLine($"Greenchoice login technical error {loginResult.StatusCode}");
+                Console.WriteLine(loginResult.RequestMessage.ToString());
+            }
 
             // Extract from query string
             var code = HtmlGetInputValueSQuote(content, "code");
