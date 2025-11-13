@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -400,7 +400,7 @@ namespace KPNAPIPoll
                     using (StreamReader sr = new StreamReader(getResponse.GetResponseStream()))
                     {
                         var result = sr.ReadToEnd();//Read logged in webpage
-                        Console.WriteLine(result);
+                       //Console.WriteLine(result);
 
                         var res = JsonSerializer.Deserialize<DynResRefreshAppToken>(result);
 

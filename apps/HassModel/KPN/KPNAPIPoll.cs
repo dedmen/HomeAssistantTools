@@ -7,10 +7,12 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using static KPNAPIPoll.KPNRequester;
 
 namespace HomeAssistantNetDaemon.apps.HassModel.KPN
 {
@@ -51,7 +53,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.KPN
             }
 
             InitProductEntry();
-            _scheduler.RunEvery(TimeSpan.FromMinutes(30), () =>
+            _scheduler.RunEvery(TimeSpan.FromMinutes(10), () =>
             {
                 if (string.IsNullOrEmpty(_productEntry.id))
                 {
@@ -75,6 +77,15 @@ namespace HomeAssistantNetDaemon.apps.HassModel.KPN
                 Console.WriteLine(ex.Message);
                 //Thread.Sleep(30000);
 
+                if (ex is System.Net.WebException webEx)
+                {
+                    if (webEx.Response is System.Net.HttpWebResponse resp)
+                    {
+                        if (resp.StatusCode == HttpStatusCode.Unauthorized)
+                            _kr.DoLogin();
+                    }
+                }
+
                 // try again
                 _scheduler.RunIn(TimeSpan.FromMinutes(5), InitProductEntry);
             }
@@ -82,7 +93,18 @@ namespace HomeAssistantNetDaemon.apps.HassModel.KPN
 
         private async void CheckLimits()
         {
-            var usageData = _productEntry.GetUsage(_kr);
+            ProductUsage usageData;
+
+            try
+            {
+                usageData = _productEntry.GetUsage(_kr);
+            }
+            catch (System.InvalidOperationException _)
+            {
+                // Happens after midnight for a short while, no NL data subscriptíon present
+                Thread.Sleep(TimeSpan.FromMinutes(1));
+                return;
+            }
 
             var availableData = float.Parse(usageData.initial, NumberStyles.Any, CultureInfo.InvariantCulture);
             var usedData = float.Parse(usageData.usage, NumberStyles.Any, CultureInfo.InvariantCulture);
@@ -99,7 +121,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.KPN
 
             Console.WriteLine($"[{DateTime.Now}] Avail {availableData} - Used {usedData} - Remaining GBs {remainingData}");
 
-            const float desiredSpareData = 12;
+            const float desiredSpareData = 20;
             const float dataPerOrder = 2; // 2gb per bundle order
 
             if (remainingData < desiredSpareData)
@@ -107,11 +129,18 @@ namespace HomeAssistantNetDaemon.apps.HassModel.KPN
                 var toRequest = (int)Math.Ceiling((desiredSpareData - remainingData) / dataPerOrder);
                 Console.WriteLine($"Less than {desiredSpareData}gb available, requesting {toRequest} extensions");
 
-                for (int i = 0; i < toRequest; i++)
+                try
+                { 
+                    for (int i = 0; i < toRequest; i++)
+                    {
+                        _kr.OrderPacket();
+                        if (toRequest > i+1) // Delay if we do multiple
+                            Thread.Sleep(8000 + Random.Shared.Next(4000));
+                    }
+                }
+                catch (Exception ex)
                 {
-                    _kr.OrderPacket();
-                    if (toRequest > i+1) // Delay if we do multiple
-                        Thread.Sleep(8000 + Random.Shared.Next(4000));
+                    Console.WriteLine("Ordering threw exception, skipping all orders");
                 }
             }
 

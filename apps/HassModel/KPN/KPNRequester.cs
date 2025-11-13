@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.CodeDom;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -280,6 +280,12 @@ namespace KPNAPIPoll
 
                     if (ex is System.Net.WebException exception)
                     {
+
+                        using (StreamReader sr = new StreamReader(exception.Response.GetResponseStream()))
+                        {
+                            var result = sr.ReadToEnd();
+                            Console.WriteLine(result);
+                        }
 
                         // login again and retry
                         //if (exception.Status == WebExceptionStatus.ProtocolError &&
