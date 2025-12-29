@@ -41,6 +41,13 @@ namespace HomeAssistantNetDaemon.apps.HassModel.Zyxel
                     else if (state == "off")
                         SetLTEOn(false);
                 }));
+
+
+                ha.RegisterServiceCallBack<object>("ZyxelRouterReboot", a =>
+                {
+                    Console.WriteLine($"[{DateTime.Now}] Run router reboot");
+                    SystemReboot();
+                });
             });
 
             Task.Run(async () =>
@@ -84,6 +91,25 @@ namespace HomeAssistantNetDaemon.apps.HassModel.Zyxel
             if (result != null)
                 await _entityManager.SetStateAsync("switch.zyxel_lte_enabled", isOn ? "on" : "off").ConfigureAwait(false);
         }
+
+        private async void SystemReboot()
+        {
+            using var client = new SshClient(_cfg["Zyxel:Host"], _cfg["Zyxel:Username"], _cfg["Zyxel:Password"]);
+            client.Connect();
+
+            using ShellStream shell = client.CreateShellStream("shell", 128, 128, 128, 128, 1024);
+
+            shell.DataReceived += (object? sender, Renci.SshNet.Common.ShellDataEventArgs e) =>
+            {
+                Console.WriteLine(System.Text.Encoding.Default.GetString(e.Data));
+            };
+
+            shell.Expect(new Regex(@"[$>]"));
+
+            shell.WriteLine("zycli reboot");
+            shell.Expect(new Regex(@"System rebooting"), TimeSpan.FromSeconds(2));
+        }
+
 
         private async Task<bool> CheckAPNStatus()
         {
