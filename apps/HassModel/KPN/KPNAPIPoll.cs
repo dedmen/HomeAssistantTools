@@ -133,7 +133,8 @@ namespace HomeAssistantNetDaemon.apps.HassModel.KPN
                 { 
                     for (int i = 0; i < toRequest; i++)
                     {
-                        _kr.OrderPacket();
+                        _productEntry.OrderSubscriptionProduct(_kr);
+                        Console.WriteLine($"Ordered {i + 1}/{toRequest}");
                         if (toRequest > i+1) // Delay if we do multiple
                             Thread.Sleep(8000 + Random.Shared.Next(4000));
                     }

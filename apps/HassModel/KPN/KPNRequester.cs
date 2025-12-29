@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.CodeDom;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -119,6 +119,49 @@ namespace KPNAPIPoll
                 }
             }
 
+            public void OrderSubscriptionProduct(KPNRequester requester, ulong subscriptionPlanId = 1019993727)
+            {
+                // Cookie precondition
+                // ci_device_uuid=19ab6f61-b22d-4860-bb54-63227ce532e1; mijnkpnapp=1; mijnkpnapp_locale=en; mijnkpnapp_colorscheme=light;
+                // authorization bearer token
+
+
+                {
+                    var request = WebRequest.Create($"https://api.kpn.com/selfcare-bff/v1/products/{id}/order?sc_service_types=cscmobpost") as HttpWebRequest;
+                    request.CookieContainer = requester.cookies; // Assign it some cookies 
+                    request.Method = "POST";
+                    request.UserAgent = appUserAgent;
+                    request.Headers.Add(HttpRequestHeader.Authorization, requester.authHeader);
+
+
+                    var bytes = Encoding.ASCII.GetBytes($"{{ \"id\": \"{subscriptionPlanId}\" }}"); // 2GB free
+                    request.ContentLength = bytes.Length;
+                    using (Stream loginStream = request.GetRequestStream())
+                    {
+                        loginStream.Write(bytes, 0, bytes.Length);
+                    }
+
+                    try
+                    {
+                        using (WebResponse getResponse = request.GetResponse())
+                        {
+                            // Expected is 204 no content
+                        }
+                    }
+                    catch (System.Net.WebException exception)
+                    {
+                        requester.Log($"ProductEntry.OrderSubscriptionProduct threw: ${exception.ToString()}");
+                        using (StreamReader sr = new StreamReader(exception.Response.GetResponseStream()))
+                        {
+                            var result = sr.ReadToEnd();//Read logged in webpage
+                            // See if it somehow indicates that token expired
+                            Console.WriteLine(result);
+                        }
+                        throw;
+                    }
+                }
+            }
+
         }
 
         struct ProductCategory
@@ -174,154 +217,6 @@ namespace KPNAPIPoll
                     throw;
                 }
             }
-        }
-
-        public bool OrderPacket(bool canRetry = true)
-        {
-            #region Select sub plan
-            var request = WebRequest.Create(selectPlan) as HttpWebRequest; //we know we get redirected to here, so just go there. 
-                request.UserAgent = cigatewayUserAgent;
-                request.CookieContainer = cookies; // Assign it some cookies 
-                request.ContentType = "application/x-www-form-urlencoded";
-                request.Method = "POST";
-                request.Headers.Add("Origin", "https://mijn.kpn.com");
-                request.Referer = "https://mijn.kpn.com/";
-
-                request.Headers.Add("x-requested-with", "nl.kpn.mijn");
-                request.Headers.Add("app-identifier", "mijn_kpn_desktop");
-                request.Headers.Add("CSRF-Session-Key", csrfSessionKey);
-
-
-                var bytes = Encoding.ASCII.GetBytes($"number={_cfg["KPN:Number"]}&subscriptionPlanId={_cfg["KPN:SubscriptionPlanId"]}&type=addon"); // 2GB free
-                request.ContentLength = bytes.Length;
-                using (Stream loginStream = request.GetRequestStream())
-                {
-                    loginStream.Write(bytes, 0, bytes.Length);
-                }
-
-                try
-                {
-                    request.GetResponse().Dispose();
-                }
-                catch (Exception ex)
-                {
-                    Log($"Select subplan threw: ${ex.ToString()}");
-
-
-                    if (ex is System.Net.WebException exception)
-                    {
-                        // login again and retry
-                        if (canRetry &&
-                            exception.Status == WebExceptionStatus.ProtocolError &&
-                            ((System.Net.HttpWebResponse)exception.Response).StatusCode == HttpStatusCode.Unauthorized)
-                        {
-                            DoLogin();
-                            return OrderPacket(false);
-                        }
-                        else if (exception.Status == WebExceptionStatus.ProtocolError &&
-                                 ((System.Net.HttpWebResponse) exception.Response).StatusCode == HttpStatusCode.BadRequest)
-                        {
-                            return false;
-                        }
-                        else
-                            throw;
-                    }
-                    else
-                        throw;
-
-                    return false;
-                }
-
-                // {
-                //     "status": "OK",
-                //     "warningTitle": null,
-                //     "warning": null,
-                //     "messageTitle": null,
-                //     "messages": null
-                // }
-            #endregion
-
-            #region buy
-                request = WebRequest.Create(buyPlan) as HttpWebRequest; //we know we get redirected too here, so just go there. 
-                request.UserAgent = "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/43.0.2357.134 Safari/537.36";
-                request.CookieContainer = cookies; // Assign it some cookies 
-                request.ContentType = "application/x-www-form-urlencoded";
-                request.Method = "POST";
-                request.Headers.Add("Origin", "https://mijn.kpn.com");
-                request.Referer = "https://mijn.kpn.com/";
-
-                request.Headers.Add("x-requested-with", "nl.kpn.mijn");
-                request.Headers.Add("app-identifier", "mijn_kpn_desktop");
-                request.Headers.Add("CSRF-Session-Key", csrfSessionKey);
-
-                bytes = Encoding.ASCII.GetBytes($"number={_cfg["KPN:Number"]}");
-                request.ContentLength = bytes.Length;
-                using (Stream loginStream = request.GetRequestStream())
-                {
-                    loginStream.Write(bytes, 0, bytes.Length);
-                }
-
-
-                try
-                {
-                    using (WebResponse getResponse = request.GetResponse())
-                    {
-                        using (StreamReader sr = new StreamReader(getResponse.GetResponseStream()))
-                        {
-                            var result = sr.ReadToEnd();//Read logged in webpage
-
-                            //Console.WriteLine(result);
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Log($"Buy threw: ${ex.ToString()}");
-
-                    if (ex is System.Net.WebException exception)
-                    {
-
-                        using (StreamReader sr = new StreamReader(exception.Response.GetResponseStream()))
-                        {
-                            var result = sr.ReadToEnd();
-                            Console.WriteLine(result);
-                        }
-
-                        // login again and retry
-                        //if (exception.Status == WebExceptionStatus.ProtocolError &&
-                        //    ((System.Net.HttpWebResponse)exception.Response).StatusCode == HttpStatusCode.Unauthorized)
-                        //{
-                        //
-                        //    GetLoginToken(cookies, out csrfSessionKey, true);
-                        //    GetAppInit(cookies, ref csrfSessionKey, out var appTokenCode, true);
-                        //    GetAppToken(cookies, ref csrfSessionKey, ref appTokenCode, out var oauthCookie, true);
-                        //    return OrderPacket(cookies, ref csrfSessionKey);
-                        //}
-                        //else if (exception.Status == WebExceptionStatus.ProtocolError &&
-                        //         ((System.Net.HttpWebResponse)exception.Response).StatusCode ==
-                        //         HttpStatusCode.BadRequest)
-                        //{
-                        //    return false;
-                        //}
-                        //else
-                            throw;
-                    }
-                    else
-                        throw;
-
-                    return false;
-                }
-            // {
-            //     "status": "OK",
-            //     "messages": [
-            //         "Bedankt voor uw bestelling. Het kan een uur duren voordat deze wijziging zichtbaar is in MijnKPN."
-            //     ]
-            // }
-
-
-            return true;
-
-            #endregion
         }
     }
 }

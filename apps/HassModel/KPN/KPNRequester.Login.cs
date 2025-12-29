@@ -16,9 +16,10 @@ namespace KPNAPIPoll
     internal partial class KPNRequester
     {
         private const string client_id = "dtLWqtxw84z2hkPAb3vzJb1gmVbg1xnJoB0vnFTX";
+        private const string client_idWeb = "patHWjVx5dSN3QEbAdJRzjZ6jdCcusvMhlvfcc4N";
         const string cigateway_login = "https://api.kpn.com/cigateway/v2/login?mijnkpnapp_version=6.13.0&mijnkpnapp_buildnr=9273";
         const string cigateway_redirectToApp = "https://api.kpn.com/cigateway/v1/redirectToApplication?mijnkpnapp_version=6.13.0&mijnkpnapp_buildnr=9273";
-        const string appToken = "https://mijn.kpn.com/api/auth/v1/token";
+        const string appToken = "https://api.kpn.com/auth/v1/token";
 
         private const string appUserAgent = "MijnKPN/6.13.0(nl.kpn.mijn; build:9273; Android 9)";
         private const string cigatewayUserAgent = "Mozilla/5.0 (Linux; Android 9; Android SDK built for x86_64 Build/PSR1.180720.122; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/69.0.3497.100 Mobile Safari/537.36";
@@ -84,6 +85,17 @@ namespace KPNAPIPoll
             public string redirect_url { get; set; }
         }
 
+        struct DynResChallengeRequest
+        {
+            public string challenge_id { get; set; }
+            public string challenge_request { get; set; }
+        }
+
+        struct DynResChallengeId
+        {
+            public string challenge_id { get; set; }
+        }
+
         public void GetLoginToken(out string appTokenCode, bool force = false)
         {
             // cigateway has its own cookie store, the session id we have is only temporary
@@ -120,6 +132,7 @@ namespace KPNAPIPoll
             // Login and get session id into our cookies
 
             string csrfSessionKey = "";
+            string mfaChallengeID = null;
 
             {
                 var request = WebRequest.Create(cigateway_login) as HttpWebRequest;
@@ -146,7 +159,7 @@ namespace KPNAPIPoll
                     loginStream.Write(bytes, 0, bytes.Length);
                 }
 
-                var response = request.GetResponse();
+                using var response = request.GetResponse();
                 csrfSessionKey = response.Headers.Get("csrf-session-key");
 
                 // Response are set cookies for KSR and sessionid
@@ -158,9 +171,129 @@ namespace KPNAPIPoll
                 }
                 */
 
+                // Response contains set cookies for KSR and sessionid
 
-                // KSR is a JWT token, usually AES256 encrypted
+                using (StreamReader sr = new StreamReader(response.GetResponseStream()))
+                {
+                    var result = sr.ReadToEnd();//Read logged in webpage
+                    Console.WriteLine(result);
+
+                    if (result.Contains("2fa_required"))
+                    {
+                        var res = JsonSerializer.Deserialize<DynResChallengeId>(result);
+                        mfaChallengeID = res.challenge_id;
+                    }
+                }
             }
+
+
+            {
+                // result = "{\"status\":\"incomplete\",\"status_reason\":\"2fa_required\",\"allowed_methods\":{\"SMS\":\"0622*****3\"},\"challenge_id\":\"c1177e6c-7ca6-4ad7-aed9-c068a63a3b7c\",\"timeout_seconds\":600}"
+                // FUCK.
+
+                string challengeRequest;
+
+                if (!string.IsNullOrEmpty(mfaChallengeID))
+                {
+                    // Get challenge request
+
+                    /// POST https://api.kpn.com/cigateway/v2/login-challenge/sms/init
+                    // Body {"challenge_id":"c1177e6c-7ca6-4ad7-aed9-c068a63a3b7c"}
+
+
+                    {
+                        var request = WebRequest.Create("https://api.kpn.com/cigateway/v2/login-challenge/sms/init") as HttpWebRequest;
+                        request.CookieContainer = cookies; // Assign it some cookies 
+
+                        request.ContentType = "application/x-www-form-urlencoded";
+                        request.Method = "POST";
+                        request.Referer = "https://inloggen.kpn.com/";
+                        request.ContentType = "application/json";
+                        request.Headers.Add("csrf-session-key", csrfSessionKey);
+                        request.UserAgent = cigatewayUserAgent;
+
+                        byte[] bytes = Encoding.ASCII.GetBytes($"{{\"challenge_id\":\"{mfaChallengeID}\"}}");
+                        request.ContentLength = bytes.Length;
+                        using (Stream loginStream = request.GetRequestStream())
+                        {
+                            loginStream.Write(bytes, 0, bytes.Length);
+                        }
+
+                        // Resp {"challenge_id":"1c90e7bb-9165-406e-9c4b-08951ac50ddf","challenge_request":"82f80bde-71c0-4188-ba5d-cf130746f1b1"}
+
+                        try
+                        {
+                            using (WebResponse getResponse = request.GetResponse())
+                            {
+                                using (StreamReader sr = new StreamReader(getResponse.GetResponseStream()))
+                                {
+                                    var result = sr.ReadToEnd();
+                                    var res = JsonSerializer.Deserialize<DynResChallengeRequest>(result);
+                                    challengeRequest = res.challenge_request;
+                                }
+                            }
+                        }
+                        catch (System.Net.WebException exception)
+                        {
+                            Log($"2FA challenge init threw: ${exception.ToString()}");
+                            throw;
+                        }
+                    }
+
+                    Console.Write("Enter SMS 2FA code: ");
+                    string challengeResponseCode = Console.ReadLine();
+
+                    // POST https://api.kpn.com/cigateway/v2/login-challenge/sms/validate
+                    // {"challenge_id":"1c90e7bb-9165-406e-9c4b-08951ac50ddf","challenge_request":"82f80bde-71c0-4188-ba5d-cf130746f1b1","challenge_response":"48518","remember_device":true}
+
+                    {
+                        var request = WebRequest.Create("https://api.kpn.com/cigateway/v2/login-challenge/sms/validate") as HttpWebRequest;
+                        request.CookieContainer = cookies; // Assign it some cookies 
+
+                        request.ContentType = "application/x-www-form-urlencoded";
+                        request.Method = "POST";
+                        request.Referer = "https://inloggen.kpn.com/";
+                        request.ContentType = "application/json";
+                        request.Headers.Add("csrf-session-key", csrfSessionKey);
+                        request.UserAgent = cigatewayUserAgent;
+
+                        byte[] bytes = Encoding.ASCII.GetBytes($"{{\"challenge_id\":\"{mfaChallengeID}\",\"challenge_request\":\"{challengeRequest}\",\"challenge_response\":\"{challengeResponseCode}\",\"remember_device\":true}}");
+                        request.ContentLength = bytes.Length;
+                        using (Stream loginStream = request.GetRequestStream())
+                        {
+                            loginStream.Write(bytes, 0, bytes.Length);
+                        }
+
+                        // Resp {"challenge_id":"1c90e7bb-9165-406e-9c4b-08951ac50ddf","challenge_request":"82f80bde-71c0-4188-ba5d-cf130746f1b1"}
+
+                        try
+                        {
+                            using (WebResponse getResponse = request.GetResponse())
+                            {
+                                using (StreamReader sr = new StreamReader(getResponse.GetResponseStream()))
+                                {
+                                    var result = sr.ReadToEnd();
+                                    // 
+                                }
+                            }
+                        }
+                        catch (System.Net.WebException exception)
+                        {
+                            Log($"2FA challenge init threw: ${exception.ToString()}");
+                            throw;
+                        }
+                    }
+                }
+
+
+
+
+
+            }
+
+
+            // Results in Cookies for KSR and sessionid
+            // KSR is a JWT token, usually AES256 encrypted
 
             // We can now translate that sessionid into a real token
             {
@@ -274,12 +407,13 @@ namespace KPNAPIPoll
 
             var request = WebRequest.Create(appToken) as HttpWebRequest; //we know we get redirected too here, so just go there. 
             request.UserAgent = appUserAgent;
-            request.CookieContainer = cookies; // Assign it some cookies 
-            request.ContentType = "application/x-www-form-urlencoded";
+            request.Referer = "https://www.kpn.com/";
+            request.CookieContainer = cookies; // Assign it some cookies
+            request.ContentType = "application/x-www-form-urlencoded;charset=UTF-8";
             request.Method = "POST";
 
-            // client_id={client_id}&code={appTokenCode}&code_verifier=&grant_type=authorization_code&redirect_uri=https://mijn.kpn.com/oauth_redirect&response_type=id_token+token
-            var requestString = $"client_id={client_id}&code={appTokenCode}&code_verifier=&grant_type=authorization_code&redirect_uri=https://mijn.kpn.com/oauth_redirect&response_type=id_token+token";
+            var requestString = $"client_id={client_id}&code={appTokenCode}&grant_type=authorization_code&redirect_uri=https%3A%2F%2Fmijn.kpn.com%2Foauth_redirect&response_type=id_token+token";
+            //var requestString = $"client_id={client_idWeb}&code={appTokenCode}&grant_type=authorization_code&redirect_uri=https://www.kpn.com/login-callback&response_type=id_token+token";
             var bytes = Encoding.ASCII.GetBytes(requestString);
             request.ContentLength = bytes.Length;
             using (Stream loginStream = request.GetRequestStream())
@@ -318,7 +452,7 @@ namespace KPNAPIPoll
                             accessToken = (string)res.access_token,
                             refreshToken = (string)res.refresh_token,
                             csrfSessionKey = csrfSessionKey,
-                            mijnSessionId = cookies.GetCookies(new Uri("https://mijn.kpn.com/"))["sessionid"]
+                            mijnSessionId = cookies.GetCookies(new Uri("https://api.kpn.com/"))["sessionid"]
                         }));
                     }
                 }
@@ -326,6 +460,13 @@ namespace KPNAPIPoll
             catch (System.Net.WebException exception)
             {
                 Log($"GetNewAppToken threw: ${exception.ToString()}");
+
+                using (StreamReader sr = new StreamReader(exception.Response.GetResponseStream()))
+                {
+                    var result = sr.ReadToEnd();//Read logged in webpage
+                    Console.WriteLine(result);
+                }
+
                 // login again and retry
                 //if (exception.Status == WebExceptionStatus.ProtocolError &&
                 //    ((System.Net.HttpWebResponse)exception.Response).StatusCode == HttpStatusCode.Unauthorized)
@@ -386,7 +527,8 @@ namespace KPNAPIPoll
 
             // client_id={client_id}&code={appTokenCode}&code_verifier=&grant_type=authorization_code&redirect_uri=https://mijn.kpn.com/oauth_redirect&response_type=id_token+token
 
-            var bytes = Encoding.ASCII.GetBytes($"client_id={client_id}&grant_type=refresh_token&refresh_token={refreshToken}&redirect_uri=https%3A%2F%2Fmijn.kpn.com%2F%23%oauth_redirect");
+            //var bytes = Encoding.ASCII.GetBytes($"client_id={client_id}&grant_type=refresh_token&refresh_token={refreshToken}&redirect_uri=https%3A%2F%2Fmijn.kpn.com%2F%23%oauth_redirect");
+            var bytes = Encoding.ASCII.GetBytes($"client_id={client_id}&grant_type=refresh_token&refresh_token={refreshToken}&redirect_uri=https%3A%2F%2Fwww.kpn.com%2Flogin-callback");
             request.ContentLength = bytes.Length;
             using (Stream loginStream = request.GetRequestStream())
             {
@@ -425,7 +567,7 @@ namespace KPNAPIPoll
                             accessToken = (string)res.access_token,
                             refreshToken = (string)res.refresh_token,
                             csrfSessionKey = csrfSessionKey,
-                            mijnSessionId = cookies.GetCookies(new Uri("https://mijn.kpn.com/"))["sessionid"]
+                            mijnSessionId = cookies.GetCookies(new Uri("https://api.kpn.com/"))["sessionid"]
                         }));
                         return true;
                     }
