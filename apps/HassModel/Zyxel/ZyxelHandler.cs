@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Configuration;
 using NetDaemon.Extensions.MqttEntityManager;
 using NetDaemon.HassModel.Integration;
 using Renci.SshNet;
@@ -26,15 +26,19 @@ namespace HomeAssistantNetDaemon.apps.HassModel.Zyxel
             _cfg = cfg;
             _entityManager = entityManager;
 
+            Console.WriteLine("ZyxelStartup");
+
             Task.Run(async () =>
             {
-                await entityManager.CreateAsync("switch.zyxel_lte_enabled", options: new EntityCreationOptions { DeviceClass = "switch", Name = "LTE Enabled", PayloadOn = "ON", PayloadOff = "OFF" });
+                await entityManager.CreateAsync("binary_sensor.zyxel_lte_connected", options: new EntityCreationOptions { DeviceClass = "connectivity", Name = "LTE Connected", PayloadOn = "on", PayloadOff = "off" });
+
+                await entityManager.CreateAsync("switch.zyxel_lte_enabled", options: new EntityCreationOptions { DeviceClass = "switch", Name = "LTE Enabled", PayloadOn = "on", PayloadOff = "off" });
                 (await entityManager.PrepareCommandSubscriptionAsync("switch.zyxel_lte_enabled").ConfigureAwait(false))
                 .Subscribe(new Action<string>(async state =>
                 {
-                    if (state == "ON")
+                    if (state == "on")
                         SetLTEOn(true);
-                    else if (state == "OFF")
+                    else if (state == "off")
                         SetLTEOn(false);
                 }));
             });
@@ -42,7 +46,11 @@ namespace HomeAssistantNetDaemon.apps.HassModel.Zyxel
             Task.Run(async () =>
             {
                 bool isOn = await CheckAPNStatus();
-                await _entityManager.SetStateAsync("switch.zyxel_lte_enabled", isOn ? "ON" : "OFF").ConfigureAwait(false);
+                await _entityManager.SetStateAsync("binary_sensor.zyxel_lte_connected", isOn ? "on" : "off").ConfigureAwait(false);
+                var switchState = ha.GetState("switch.zyxel_lte_enabled");
+                bool isWantedOn = switchState?.State == "on";
+                if (isWantedOn != isOn)
+                    SetLTEOn(isWantedOn);
             });
         }
 
@@ -74,7 +82,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.Zyxel
             var result = shell.Expect(new Regex(@"Command Successful."), TimeSpan.FromSeconds(2));
 
             if (result != null)
-                await _entityManager.SetStateAsync("switch.zyxel_lte_enabled", isOn ? "ON" : "OFF").ConfigureAwait(false);
+                await _entityManager.SetStateAsync("switch.zyxel_lte_enabled", isOn ? "on" : "off").ConfigureAwait(false);
         }
 
         private async Task<bool> CheckAPNStatus()
@@ -91,7 +99,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.Zyxel
 
             shell.Expect(new Regex(@"[$>]"));
 
-            shell.WriteLine("cfg cellwan_mapn get");
+            shell.WriteLine("cfg cellwan_mapn get"); //#TODO we want to know if connected too , not just if enabled
 
             var result = shell.Expect(new Regex(@"1\s*(Enabled|Disabled)"), TimeSpan.FromSeconds(2));
 
