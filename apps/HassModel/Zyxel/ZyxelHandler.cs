@@ -59,6 +59,8 @@ namespace HomeAssistantNetDaemon.apps.HassModel.Zyxel
                 if (isWantedOn != isOn)
                     SetLTEOn(isWantedOn);
             });
+
+            Task.Run(LogMonitor);
         }
 
         private async void SetLTEOn(bool isOn)
@@ -134,9 +136,83 @@ namespace HomeAssistantNetDaemon.apps.HassModel.Zyxel
             if (result.EndsWith("Enabled"))
                 return true;
             return false;
-
-            return false;
         }
+
+
+        private async void LogMonitor()
+        {
+            if (string.IsNullOrEmpty(_cfg["Zyxel:Exploit"])) // Exploit needs to be known for this
+                return;
+
+
+            bool isReconnecting = false;
+            while (true)
+            {
+                using var client = new SshClient(_cfg["Zyxel:Host"], _cfg["Zyxel:Username"], _cfg["Zyxel:Password"]);
+                client.Connect();
+
+                if (isReconnecting)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(30)); // We reconnected, probably router restart, it is probably still working on its boot sequence.
+                }
+
+                using ShellStream shell = client.CreateShellStream("shell", 128, 128, 128, 128, 1024);
+                //using var logfile = System.IO.File.Open("P:/conLog.txt", System.IO.FileMode.OpenOrCreate, System.IO.FileAccess.Write, System.IO.FileShare.ReadWrite);
+                shell.DataReceived += (object? sender, Renci.SshNet.Common.ShellDataEventArgs e) =>
+                {
+                    //Console.Write(System.Text.Encoding.Default.GetString(e.Data));
+
+                    //logfile.Write(e.Data);
+                    //logfile.Flush();
+                };
+
+                shell.Expect(new Regex(@"[$>]"));
+
+                shell.WriteLine(_cfg["Zyxel:Exploit"]); // Shell exploit
+                await Task.Delay(100);
+
+
+                if (isReconnecting)
+                {
+                    // Router restart? make sure we have current state (If we lost connection before, we will have turned it off
+
+                    await Task.Run(async () =>
+                    {
+                        bool isOn = await CheckAPNStatus();
+                        await _entityManager.SetStateAsync("binary_sensor.zyxel_lte_connected", isOn ? "on" : "off").ConfigureAwait(false);
+                    });
+
+                    isReconnecting = false;
+                }
+
+                shell.WriteLine("busybox tail -f /var/log/syslog.log");
+
+                // [cellwan] Nov 15 05:45:11 user.notice CM: APN disconnected, inform backend.
+                // [cellwan] Nov 15 05:45:14 user.notice CM: APN successfully connected, inform backend.
+                while (client.IsConnected)
+                {
+                    var line = shell.ReadLine();
+
+                    if (line?.StartsWith("[cellwan]") ?? false)
+                    {
+                        if (line.Contains("APN disconnected"))
+                        {
+                            await _entityManager.SetStateAsync("binary_sensor.zyxel_lte_connected", "off");
+                        }
+                        else if (line.Contains("APN successfully connected"))
+                        {
+                            await _entityManager.SetStateAsync("binary_sensor.zyxel_lte_connected", "on");
+                        }
+                    }
+                }
+
+                // We got disconnected?! The most likely reason is that the router went offline (reboot?), lets assume if we are disconnected from router, that we are offline
+                await _entityManager.SetStateAsync("binary_sensor.zyxel_lte_connected", "off");
+                isReconnecting = true;
+
+            }
+        }
+
 
     }
 }
