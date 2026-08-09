@@ -132,7 +132,7 @@ namespace KPNAPIPoll
                     request.Method = "POST";
                     request.UserAgent = appUserAgent;
                     request.Headers.Add(HttpRequestHeader.Authorization, requester.authHeader);
-
+                    request.ContentType = "application/json";
 
                     var bytes = Encoding.ASCII.GetBytes($"{{ \"id\": \"{subscriptionPlanId}\" }}"); // 2GB free
                     request.ContentLength = bytes.Length;

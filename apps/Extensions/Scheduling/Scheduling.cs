@@ -1,4 +1,5 @@
 using NetDaemon.Extensions.Scheduler;
+using NetDaemon.HassModel.Integration;
 
 // Use unique namespaces for your apps if you going to share with others to avoid
 // conflicting names
