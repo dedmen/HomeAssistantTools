@@ -21,6 +21,8 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
         public int StateOfCharge = 50; // Assume half way full, that won't cause issues whichever direction we actually end up going
 
         public float LastKnownState = -5000;
+        // Sending a command to the battery once, sometimes it just won't obey, so we use this to repeat send the same command multiple times
+        public int LastKnownStateConfirmCounter = 0;
 
         public readonly ConditionalTokenBucketLimiter _rateLimiter;
 
@@ -114,16 +116,14 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
             {
                 unit_of_measurement = "W",
                 icon = "mdi:weather-sunset-up",
-                state_class = "measurement",
-                device = new[] { "netdaemon" }
+                state_class = "measurement"
             }).ConfigureAwait(false);
 
             await _entityManager.CreateAsync("sensor.netdaemon_batterycommand_bat2", new EntityCreationOptions { Name = "Battery2 commanded Target", DeviceClass = "power", }, new
             {
                 unit_of_measurement = "W",
                 icon = "mdi:weather-sunset-up",
-                state_class = "measurement",
-                device = new[] { "netdaemon" }
+                state_class = "measurement"
             }).ConfigureAwait(false);
 
 
@@ -344,6 +344,11 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
                 Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} Device {target.NetworkAddress} is no longer fully charged");
             }
 
+            if (target.LastKnownState == powerWatts) // Count how many times we sent the same command
+                target.LastKnownStateConfirmCounter++;
+            else
+                target.LastKnownStateConfirmCounter = 0;
+
             target.LastKnownState = powerWatts;
             target.IsStandby = mode == BatteryMode.Standby;
             if (powerWatts != 0)
@@ -369,7 +374,8 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
             if (Math.Abs(powerWatts) < 50)
                 powerWatts = 0;
 
-            if (target.LastKnownState == powerWatts && !forceSend)
+            // We want to not repeatedly send the same state, but also the battery doesn't always obey when its only sent once, so we send the same state up to 3 times before we stop
+            if (target.LastKnownState == powerWatts && target.LastKnownStateConfirmCounter > 2 && !forceSend)
                 return; // No change
 
             // The mode's behaviors at 0 load are different. Standby does 0w (but clicks relays every time its switched to/from), charging does 30w, and discharging does 0 without clicking relays. I suspect discharge consumes power out of the batter instead
