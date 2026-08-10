@@ -572,8 +572,15 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
                     }
 
                     {
-                        // Give all to lowest
-                        var batteryToUse = batteries.MinBy(x => x.StateOfCharge)!;
+                        // Used to give the power to the lowest battery, but this caused two batteries to constantly switch places, with every percent change of SoC, because the other one would become lower
+                        // Instead of choosing the lowest, prefer a battery that is already charging. That way the 5% SoC delta code above, will take care of switching between the batteries, and it won't flip around that often.
+
+                        // The one that is already charging
+                        var batteryToUse = batteries.FirstOrDefault(x => x.LastKnownState > 50);
+
+                        // Otherweise give all to lowest
+                        if (batteryToUse == null)
+                            batteryToUse = batteries.MinBy(x => x.StateOfCharge)!;
 
                         //Console.WriteLine($"BAT charge all to lowest {powerWatts}");
 
