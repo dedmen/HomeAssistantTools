@@ -87,24 +87,28 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
             _entityManager = entityManager;
 
             _shellyEmulator = new ShellyEmulator();
-            _batteryController = new BatteryController(ha);
+            _batteryController = new BatteryController(ha, entityManager);
         }
 
 
         public async Task InitializeAsync(CancellationToken cancellationToken)
         {
+            await _batteryController.InitializeAsync(cancellationToken);
+
             await _entityManager.CreateAsync("sensor.netdaemon_targetpower", new EntityCreationOptions { Name = "Power Monitor Wanted Target", DeviceClass = "power", }, new
             {
                 unit_of_measurement = "W",
                 icon = "mdi:weather-sunset-up",
-                state_class = "measurement"
+                state_class = "measurement",
+                device = new[] { "netdaemon" }
             }).ConfigureAwait(false);
 
             await _entityManager.CreateAsync("sensor.netdaemon_batterycommand", new EntityCreationOptions { Name = "Battery commanded Target", DeviceClass = "power", }, new
             {
                 unit_of_measurement = "W",
                 icon = "mdi:weather-sunset-up",
-                state_class = "measurement"
+                state_class = "measurement",
+                device = new[] { "netdaemon" }
             }).ConfigureAwait(false);
 
             // Energy devices
@@ -215,6 +219,8 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
 
                 _entityManager.SetStateAsync("sensor.netdaemon_targetpower", $"{currentBatteryLoad + deltaToTarget}");
 
+                var commandPower = _filter.Filter(currentBatteryLoad + deltaToTarget); // We want to run the filter regularly, not just when we acquire a ticket, otherwise it updates too slowly
+
                 if (rateLimitTicket.IsAcquired)
                 {
                     if (Math.Abs(deltaToTarget) > InstantCorrectionThreshold)
@@ -224,7 +230,6 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
                     }
                     else
                     {
-                        var commandPower = _filter.Filter(currentBatteryLoad + deltaToTarget);
                         _batteryController.SetBatteryPower(commandPower);
                         _entityManager.SetStateAsync("sensor.netdaemon_batterycommand", $"{commandPower}");
                     }

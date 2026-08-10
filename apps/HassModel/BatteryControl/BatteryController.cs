@@ -1,8 +1,10 @@
-﻿using System.Collections.Generic;
+﻿using NetDaemon.Extensions.MqttEntityManager;
+using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.RateLimiting;
 using System.Threading.Tasks;
 using System.Timers;
@@ -55,7 +57,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
     }
 
 
-    internal class BatteryController
+    internal class BatteryController : IAsyncInitializable
     {
 
         private List<BatteryInfo> _batteries = new();
@@ -63,16 +65,21 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
 
         private HttpClient _httpClient = new();
 
-        private Timer _standbyCheck = new Timer(TimeSpan.FromSeconds(10));
+        private System.Timers.Timer _standbyCheck = new (TimeSpan.FromSeconds(10));
 
 
-        public BatteryController(IHaContext ha)
+        public IHaContext _ha { get; }
+        public IMqttEntityManager _entityManager { get; }
+
+
+        public BatteryController(IHaContext ha, IMqttEntityManager entityManager)
         {
+            _ha = ha;
+            _entityManager = entityManager;
+
             _httpClient.Timeout = TimeSpan.FromSeconds(15);
 
             var hostname = System.Net.Dns.GetHostName();
-
-
             if (hostname != "LAMBDA") // NetDaemon cannot reach LAN devices, but it can reach the proxy on the host
             {
                 // 1. Configure the proxy pointing to your Debian host's Nginx port
@@ -91,6 +98,33 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
 
                 _httpClient = new HttpClient(handler);
             }
+            
+            _serviceBrowser = new ServiceBrowser();
+            _serviceBrowser.ServiceAdded += onServiceAdded;
+            _serviceBrowser.ServiceRemoved += onServiceRemoved;
+            _serviceBrowser.ServiceChanged += onServiceChanged;
+        }
+
+
+        public async Task InitializeAsync(CancellationToken cancellationToken)
+        {
+
+            // These are just for monitoring that the code is working correctly
+            await _entityManager.CreateAsync("sensor.netdaemon_batterycommand_bat1", new EntityCreationOptions { Name = "Battery1 commanded Target", DeviceClass = "power", }, new
+            {
+                unit_of_measurement = "W",
+                icon = "mdi:weather-sunset-up",
+                state_class = "measurement",
+                device = new[] { "netdaemon" }
+            }).ConfigureAwait(false);
+
+            await _entityManager.CreateAsync("sensor.netdaemon_batterycommand_bat2", new EntityCreationOptions { Name = "Battery2 commanded Target", DeviceClass = "power", }, new
+            {
+                unit_of_measurement = "W",
+                icon = "mdi:weather-sunset-up",
+                state_class = "measurement",
+                device = new[] { "netdaemon" }
+            }).ConfigureAwait(false);
 
 
             //#TODO Find all batteries automatically ?
@@ -106,28 +140,28 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
             //}
 
             int socState = 0;
-            if (!int.TryParse(ha.GetState("sensor.living_room_indevolt_bk1600_sec_battery_soc").State, out socState)) // state may be "unavailable"
+            if (!int.TryParse(_ha.GetState("sensor.living_room_indevolt_bk1600_sec_battery_soc").State, out socState)) // state may be "unavailable"
                 socState = 0;
 
             _batteries.Add(new BatteryInfo()
             {
-                SerialNumber = ha.GetEntityRegistration("sensor.living_room_indevolt_bk1600_sec_battery_soc").Device.SerialNumber,
+                SerialNumber = _ha.GetEntityRegistration("sensor.living_room_indevolt_bk1600_sec_battery_soc").Device.SerialNumber,
                 StateOfCharge = socState,
                 NetworkAddress = "http://10.0.2.76:8080"
             });
 
-            if (!int.TryParse(ha.GetState("sensor.schlafzimmer_indevolt_bk1600_a673ba40t800780s_battery_soc").State, out socState))
+            if (!int.TryParse(_ha.GetState("sensor.schlafzimmer_indevolt_bk1600_a673ba40t800780s_battery_soc").State, out socState))
                 socState = 0;
 
             _batteries.Add(new BatteryInfo()
             {
-                SerialNumber = ha.GetEntityRegistration("sensor.schlafzimmer_indevolt_bk1600_a673ba40t800780s_battery_soc").Device.SerialNumber,
+                SerialNumber = _ha.GetEntityRegistration("sensor.schlafzimmer_indevolt_bk1600_a673ba40t800780s_battery_soc").Device.SerialNumber,
                 StateOfCharge = socState,
                 NetworkAddress = "http://10.0.2.246:8080"
             });
 
             // Monitor SoC changes
-            ha.StateChanges().Where(e =>
+            _ha.StateChanges().Where(e =>
                 e.Entity.EntityId == "sensor.schlafzimmer_indevolt_bk1600_a673ba40t800780s_battery_soc" ||
                 e.Entity.EntityId == "sensor.living_room_indevolt_bk1600_sec_battery_soc"
             ).Subscribe(e =>
@@ -149,7 +183,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
             });
 
             // Monitor power level changes (We need that for fully charged detection)
-            ha.StateChanges().Where(e =>
+            _ha.StateChanges().Where(e =>
                 e.Entity.EntityId == "sensor.schlafzimmer_indevolt_bk1600_a673ba40t800780s_battery_plug_total_power" ||
                 e.Entity.EntityId == "sensor.living_room_indevolt_bk1600_sec_bk1600_battery_plug_sec_total_power"
             ).Subscribe(e =>
@@ -166,10 +200,6 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
                     found.CurrentReportedPower = powerLevel;
             });
 
-            _serviceBrowser = new ServiceBrowser();
-            _serviceBrowser.ServiceAdded += onServiceAdded;
-            _serviceBrowser.ServiceRemoved += onServiceRemoved;
-            _serviceBrowser.ServiceChanged += onServiceChanged;
 
 
             _standbyCheck.Elapsed += _standbyCheck_Elapsed;
@@ -291,6 +321,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
 
         static readonly int MinimumSoC = 10;
 
+
         enum BatteryMode
         {
             Standby = 0,
@@ -317,6 +348,17 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
             target.IsStandby = mode == BatteryMode.Standby;
             if (powerWatts != 0)
                 target.LastActive = DateTimeOffset.Now;
+
+
+
+            if (target == _batteries.First())
+                _entityManager.SetStateAsync("sensor.netdaemon_batterycommand_bat1", $"{powerWatts}");
+            else
+                _entityManager.SetStateAsync("sensor.netdaemon_batterycommand_bat2", $"{powerWatts}");
+
+
+
+
         }
 
         // powerWatts is negative, for battery to discharge, positive for battery to charge
@@ -327,14 +369,10 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
             if (Math.Abs(powerWatts) < 50)
                 powerWatts = 0;
 
-            if (target.LastKnownState == powerWatts)
+            if (target.LastKnownState == powerWatts && !forceSend)
                 return; // No change
 
             // The mode's behaviors at 0 load are different. Standby does 0w (but clicks relays every time its switched to/from), charging does 30w, and discharging does 0 without clicking relays. I suspect discharge consumes power out of the batter instead
-
-            //
-
-
             //BatteryMode targetMode = powerWatts == 0 ? BatteryMode.Standby : (powerWatts > 0 ? BatteryMode.Charging : BatteryMode.Discharging); // 0=standby, 1=charging, 2=discharging
             BatteryMode targetMode = powerWatts == 0 ? BatteryMode.Discharging : (powerWatts > 0 ? BatteryMode.Charging : BatteryMode.Discharging); // 0=standby, 1=charging, 2=discharging
 
@@ -377,7 +415,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
                     else
                     {
 #if DEBUG
-                    Console.WriteLine($"[DROPPED] Set {target.NetworkAddress} to {powerWatts}");
+                        Console.WriteLine($"[DROPPED] Set {target.NetworkAddress} to {powerWatts}");
 #endif
                     }
                 }
@@ -464,6 +502,9 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
                 // Charge
                 if (powerWatts > 0)
                 {
+                    //if (powerWatts < 100) // Minimum charge power is 100w, if we can't manage it, just standby the battery
+                    //    break;
+
                     batteries = batteries.Where(x => !x.IsFullyCharged).ToList(); // Exclude fully charged batteries, they don't need any extra charging
                     if (!batteries.Any())
                         break; // All full, leave the while loop, which will cause all batteries to be set to zero
@@ -614,9 +655,15 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
         // powerWatts is negative, for battery to discharge, positive for battery to charge
         public void SetBatteryPower(float powerWatts, bool forceSend = false)
         {
+            // Enforce the batteries limits here
+
             // We cannot do less than 50w discharge, the batteries would just go to zero
-            if (powerWatts < 0 && powerWatts > -60)
-                powerWatts = -60;
+            if (powerWatts < 0 && powerWatts > -50)
+                powerWatts = -50;
+
+            // The minimum charge we can do is 100w (actually 120w on plug), we never want to overcharge
+            //if (powerWatts > 0 && powerWatts < 110)
+            //    powerWatts = 0; // Standby the battery instead
 
 
             //Console.WriteLine($"Battery command to {powerWatts}, force {forceSend}");

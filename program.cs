@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Reflection;
 using Microsoft.Extensions.Hosting;
 using NetDaemon.Extensions.Logging;
@@ -10,6 +11,10 @@ using HomeAssistantNetDaemon;
 //using HomeAssistantGenerated;
 
 #pragma warning disable CA1812
+
+
+CultureInfo.DefaultThreadCurrentCulture = CultureInfo.InvariantCulture;
+CultureInfo.DefaultThreadCurrentUICulture = CultureInfo.InvariantCulture;
 
 try
 {
