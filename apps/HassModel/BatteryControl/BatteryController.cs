@@ -1,4 +1,4 @@
-﻿using NetDaemon.Extensions.MqttEntityManager;
+using NetDaemon.Extensions.MqttEntityManager;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
@@ -21,6 +21,9 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
         public int StateOfCharge = 50; // Assume half way full, that won't cause issues whichever direction we actually end up going
 
         public float LastKnownState = -5000;
+
+        public DateTimeOffset LastKnownStateTime { get; internal set; }
+
         // Sending a command to the battery once, sometimes it just won't obey, so we use this to repeat send the same command multiple times
         public int LastKnownStateConfirmCounter = 0;
 
@@ -33,7 +36,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
 
         public float CurrentReportedPower { get; internal set; } = 0.0f;
 
-        // When the battery was last _commanded_ from discharge or standby, into charge mode. Is not updated while the battery stays in charge mode
+        // When the battery was last _commanded_ from discharge or standby, into charge mode. Is not updated while the battery stays in charge mode. Used to determine if battery is full
         public DateTimeOffset TimeOfLastSwitchToChargeMode { get; internal set; } = DateTimeOffset.Now;
 
         public int ConsequtiveRequestFailCount = 0;
@@ -255,6 +258,15 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
                     });
                 }
             }
+
+            // Sometimes the batteries just don't obey what they are told, despite the request succeeding, if their power is off from their supposed state, after giving it time to reach it, just issue command to supposed state again
+            foreach (var item in _batteries.Where(x => Math.Abs(x.LastKnownState - x.CurrentReportedPower) > 50 && (DateTimeOffset.Now - x.LastKnownStateTime) < TimeSpan.FromSeconds(10)))
+            {
+                Console.WriteLine($"Battery state missmatch {item.NetworkAddress}: {item.LastKnownState} !=  {item.CurrentReportedPower}");
+                // This one's state that we told it to do, and its actual power is off, tell it again to go where we told it
+                SendPowerCommand(item, item.LastKnownState, true);
+            }
+
         }
 
         async Task<string> DetermineNewIPAddress(BatteryInfo target)
@@ -274,7 +286,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
 
                         if (resp.StatusCode == HttpStatusCode.BadGateway) // HomeAssistant runs through proxy, and this means fail
                         {
-                            Console.WriteLine($"Determine Failed to send {target.NetworkAddress}: {resp.StatusCode}");
+                            Console.WriteLine($"Determine Failed to send {x}: {resp.StatusCode}");
                             return null;
                         }
 
@@ -284,7 +296,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"Determine Failed to send {target.NetworkAddress}: {ex.Message}");
+                        Console.WriteLine($"Determine Failed to send {x}: {ex.Message}");
                         return null;
                     }
                 });
@@ -350,9 +362,10 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
                 target.LastKnownStateConfirmCounter = 0;
 
             target.LastKnownState = powerWatts;
+            target.LastKnownStateTime = DateTimeOffset.Now;
             target.IsStandby = mode == BatteryMode.Standby;
             if (powerWatts != 0)
-                target.LastActive = DateTimeOffset.Now;
+                target.LastActive = DateTimeOffset.Now; // For determining when to send into standby
 
 
 
