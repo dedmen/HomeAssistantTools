@@ -99,16 +99,21 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
             {
                 unit_of_measurement = "W",
                 icon = "mdi:weather-sunset-up",
-                state_class = "measurement",
-                device = new[] { "netdaemon" }
+                state_class = "measurement"
             }).ConfigureAwait(false);
 
             await _entityManager.CreateAsync("sensor.netdaemon_batterycommand", new EntityCreationOptions { Name = "Battery commanded Target", DeviceClass = "power", }, new
             {
                 unit_of_measurement = "W",
                 icon = "mdi:weather-sunset-up",
-                state_class = "measurement",
-                device = new[] { "netdaemon" }
+                state_class = "measurement"
+            }).ConfigureAwait(false);
+
+            await _entityManager.CreateAsync("sensor.netdaemon_deltatotarget", new EntityCreationOptions { Name = "Power Monitor Delta To Target", DeviceClass = "power", }, new
+            {
+                unit_of_measurement = "W",
+                icon = "mdi:weather-sunset-up",
+                state_class = "measurement"
             }).ConfigureAwait(false);
 
             // Energy devices
@@ -196,12 +201,15 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
             }).Sum();
 
 
-            var meterTarget = -50; // This is the watts we want to see on the meter. Slight export
-
             var currentMeter = lastMeter + totalDeltaSinceLastMeter;
+
+            var meterTarget = currentMeter < 0 ? -10 : -50; // This is the watts we want to see on the meter. Slight export
+
+
 
             var deltaToTarget = meterTarget - currentMeter;
 
+            _entityManager.SetStateAsync("sensor.netdaemon_deltatotarget", $"{deltaToTarget}");
             var currentBatteryLoad = _powerMeters.Where(x => x.Value.Type == PowerEntity.PowerType.Battery).Select(x => x.Value.PowerLiveData).Sum();
 
             // Give the batteries a new target, such that we get to our meterTarget
