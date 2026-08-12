@@ -1,4 +1,4 @@
-using NetDaemon.Extensions.MqttEntityManager;
+﻿using NetDaemon.Extensions.MqttEntityManager;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
@@ -66,6 +66,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
     {
 
         private List<BatteryInfo> _batteries = new();
+        private float CurrentSolarPower = 0;
         private ServiceBrowser _serviceBrowser;
 
         private HttpClient _httpClient = new();
@@ -203,7 +204,14 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
                     found.CurrentReportedPower = powerLevel;
             });
 
-
+            // Monitor Solar power, we cannot charge if there is no solar
+            _ha.StateChanges().Where(e =>
+                e.Entity.EntityId == "sensor.solar_power"
+            ).Subscribe(e =>
+            {
+                if (float.TryParse(e.New.State, out var powerLevel))
+                    CurrentSolarPower = powerLevel;
+            });
 
             _standbyCheck.Elapsed += _standbyCheck_Elapsed;
             _standbyCheck.Start();
@@ -687,13 +695,18 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
             if (powerWatts < 0 && powerWatts > -50)
                 powerWatts = -50;
 
+            // If we want to charge, we only ever charge from Solar, so we can never charge at more power than we have solar
+            // Protects against negative power spikes, when a big load falls away, overshooting us into a charge instead of putting us at zero
+            if (powerWatts > 0 && powerWatts > CurrentSolarPower)
+                powerWatts = Math.Clamp(CurrentSolarPower - 80, 0, 1200); // And leave some gap for the house base load
+
             // The minimum charge we can do is 100w (actually 120w on plug), we never want to overcharge
             //if (powerWatts > 0 && powerWatts < 110)
             //    powerWatts = 0; // Standby the battery instead
 
 
-            //Console.WriteLine($"Battery command to {powerWatts}, force {forceSend}");
-            // We need to choose which batteries to task
+                //Console.WriteLine($"Battery command to {powerWatts}, force {forceSend}");
+                // We need to choose which batteries to task
 
             var split = DistributePower((int)powerWatts);
 
