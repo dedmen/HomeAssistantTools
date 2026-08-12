@@ -200,10 +200,18 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
                 return x.Value.GetDeltaSinceLastMeter();
             }).Sum();
 
+            var totalPlugLoad = _powerMeters.Select(x =>
+            {
+                if (x.Value.Type == PowerEntity.PowerType.Solar)
+                    return 0;
+                if (x.Value.Type == PowerEntity.PowerType.Grid)
+                    return 0;
+                return x.Value.PowerLiveData;
+            }).Sum();
 
             var currentMeter = lastMeter + totalDeltaSinceLastMeter;
 
-            var meterTarget = currentMeter < 0 ? -10 : -50; // This is the watts we want to see on the meter. Slight export
+            var meterTarget = totalPlugLoad < 50 ? -10 : -50; // This is the watts we want to see on the meter. Slight export
 
 
 
