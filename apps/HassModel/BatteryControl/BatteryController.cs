@@ -77,6 +77,12 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
         public IHaContext _ha { get; }
         public IMqttEntityManager _entityManager { get; }
 
+        // Only charge using a single battery, not distributing charge power between both
+        private bool SingleBatteryChargeMode = false;
+        private int MinimumSoC = 10;
+
+        private int MaximumChargeSoCDelta = 5;
+
 
         public BatteryController(IHaContext ha, IMqttEntityManager entityManager)
         {
@@ -115,20 +121,127 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
         public async Task InitializeAsync(CancellationToken cancellationToken)
         {
 
-            // These are just for monitoring that the code is working correctly
-            await _entityManager.CreateAsync("sensor.netdaemon_batterycommand_bat1", new EntityCreationOptions { Name = "Battery1 commanded Target", DeviceClass = "power", }, new
-            {
-                unit_of_measurement = "W",
-                icon = "mdi:weather-sunset-up",
-                state_class = "measurement"
-            }).ConfigureAwait(false);
+            // Monitoring displays
 
-            await _entityManager.CreateAsync("sensor.netdaemon_batterycommand_bat2", new EntityCreationOptions { Name = "Battery2 commanded Target", DeviceClass = "power", }, new
             {
-                unit_of_measurement = "W",
-                icon = "mdi:weather-sunset-up",
-                state_class = "measurement"
-            }).ConfigureAwait(false);
+                // These are just for monitoring that the code is working correctly
+                await _entityManager.CreateAsync("sensor.battery_control_batterycommand_bat1", new EntityCreationOptions { Name = "Battery1 commanded Target", DeviceClass = "power", }, new
+                {
+                    unit_of_measurement = "W",
+                    icon = "mdi:battery-sync",
+                    state_class = "measurement",
+                    state_topic = "homeassistant/sensor/battery_control_batterycommand_bat1/state",
+                    device = new { identifiers = new[] { "battery_control" }, name = "Battery Control", model = "SuperDuper Mk2", manufacturer = "Dedmen", sw_version = 1.00 }
+                }).ConfigureAwait(false);
+
+                await _entityManager.CreateAsync("sensor.battery_control_batterycommand_bat2", new EntityCreationOptions { Name = "Battery2 commanded Target", DeviceClass = "power", }, new
+                {
+                    unit_of_measurement = "W",
+                    icon = "mdi:battery-sync",
+                    state_class = "measurement",
+                    state_topic = "homeassistant/sensor/battery_control_batterycommand_bat2/state",
+                    device = new { identifiers = new[] { "battery_control" }, name = "Battery Control", model = "SuperDuper Mk2", manufacturer = "Dedmen", sw_version = 1.00 }
+                }).ConfigureAwait(false);
+            }
+
+            // Control inputs
+            {
+
+                // Charge only one battery at a time
+                {
+                    await _entityManager.CreateAsync("switch.battery_control_single_battery_charge_mode", new EntityCreationOptions { DeviceClass = "switch", Name = "Only charge one battery", PayloadOn = "on", PayloadOff = "off" }, new
+                    {
+                        icon = "mdi:filter-cog",
+                        state_topic = "homeassistant/switch/battery_control_single_battery_charge_mode/state",
+                        device = new { identifiers = new[] { "battery_control" }, name = "Battery Control", model = "SuperDuper Mk2", manufacturer = "Dedmen", sw_version = 1.00 }
+                    }).ConfigureAwait(false);
+
+                    var commandSubscription = await _entityManager.PrepareCommandSubscriptionAsync("switch.battery_control_single_battery_charge_mode").ConfigureAwait(false);
+
+                    commandSubscription.Subscribe(async commandReceived =>
+                    {
+                        await _entityManager.SetStateAsync("switch.battery_control_single_battery_charge_mode", commandReceived).ConfigureAwait(false);
+                        SingleBatteryChargeMode = commandReceived == "on";
+                    });
+
+                    SingleBatteryChargeMode = (_ha.GetState("switch.battery_control_single_battery_charge_mode")?.State ?? "off") == "on";
+                }
+
+                // Minimum SoC
+                {
+                    await _entityManager.CreateAsync("number.battery_control_minimum_soc", new EntityCreationOptions(Name: "Minimum SoC", Persist: true), new
+                    {
+                        min = 5,
+                        max = 100,
+                        step = 1.0,
+                        mode = "slider", // Can be "box" or "slider"
+                        unit_of_measurement = "%",
+                        icon = "mdi:battery-arrow-down-outline",
+
+                        state_topic = "homeassistant/number/battery_control_minimum_soc/state",
+                        device = new { identifiers = new[] { "battery_control" }, name = "Battery Control", model = "SuperDuper Mk2", manufacturer = "Dedmen", sw_version = 1.00 }
+                    }).ConfigureAwait(false);
+
+                    {
+                        var commandSubscription = await _entityManager.PrepareCommandSubscriptionAsync("number.battery_control_minimum_soc").ConfigureAwait(false);
+
+                        commandSubscription.Subscribe(async commandReceived =>
+                        {
+                            // Try parsing the incoming string into a valid double
+                            if (int.TryParse(commandReceived, out var parsedValue))
+                            {
+                                await _entityManager.SetStateAsync("number.battery_control_minimum_soc", commandReceived).ConfigureAwait(false);
+                                MinimumSoC = parsedValue;
+                            }
+                        });
+
+                        if (int.TryParse(_ha.GetState("number.battery_control_minimum_soc")?.State ?? "10", out var parsedValue))
+                        {
+                            MinimumSoC = parsedValue;
+                        }
+                    }
+                }
+
+
+                // Battery charge max SoC delta
+                {
+                    await _entityManager.CreateAsync("number.battery_control_maximum_charge_soc_delta", new EntityCreationOptions(Name: "Maximum charge SoC delta", Persist: true), new
+                    {
+                        min = 0,
+                        max = 100,
+                        step = 1.0,
+                        mode = "slider", // Can be "box" or "slider"
+                        unit_of_measurement = "%",
+                        icon = "mdi:delta",
+
+                        state_topic = "homeassistant/number/battery_control_maximum_charge_soc_delta/state",
+                        device = new { identifiers = new[] { "battery_control" }, name = "Battery Control", model = "SuperDuper Mk2", manufacturer = "Dedmen", sw_version = 1.00 }
+                    }).ConfigureAwait(false);
+
+                    {
+                        var commandSubscription = await _entityManager.PrepareCommandSubscriptionAsync("number.battery_control_maximum_charge_soc_delta").ConfigureAwait(false);
+
+                        commandSubscription.Subscribe(async commandReceived =>
+                        {
+                            // Try parsing the incoming string into a valid double
+                            if (int.TryParse(commandReceived, out var parsedValue))
+                            {
+                                await _entityManager.SetStateAsync("number.battery_control_maximum_charge_soc_delta", commandReceived).ConfigureAwait(false);
+                                MaximumChargeSoCDelta = parsedValue;
+                            }
+                        });
+
+                        if (int.TryParse(_ha.GetState("number.battery_control_maximum_charge_soc_delta")?.State ?? "5", out var parsedValue))
+                        {
+                            MaximumChargeSoCDelta = parsedValue;
+                        }
+                    }
+                }
+
+            }
+
+
+
 
 
             //#TODO Find all batteries automatically ?
@@ -147,21 +260,23 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
             if (!int.TryParse(_ha.GetState("sensor.living_room_indevolt_bk1600_sec_battery_soc").State, out socState)) // state may be "unavailable"
                 socState = 0;
 
+            // BK1600
             _batteries.Add(new BatteryInfo()
             {
                 SerialNumber = _ha.GetEntityRegistration("sensor.living_room_indevolt_bk1600_sec_battery_soc").Device.SerialNumber,
                 StateOfCharge = socState,
-                NetworkAddress = "http://10.0.2.76:8080"
+                NetworkAddress = "http://10.0.3.105:8080" // d4:27:87:5a:d4:48
             });
 
             if (!int.TryParse(_ha.GetState("sensor.schlafzimmer_indevolt_bk1600_a673ba40t800780s_battery_soc").State, out socState))
                 socState = 0;
 
+            // BK1600 Ultra
             _batteries.Add(new BatteryInfo()
             {
                 SerialNumber = _ha.GetEntityRegistration("sensor.schlafzimmer_indevolt_bk1600_a673ba40t800780s_battery_soc").Device.SerialNumber,
                 StateOfCharge = socState,
-                NetworkAddress = "http://10.0.2.246:8080"
+                NetworkAddress = "http://10.0.3.106:8080" // d4:27:87:91:6b:9c
             });
 
             // Monitor SoC changes
@@ -175,10 +290,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
                 var found = _batteries.FirstOrDefault(x => x.SerialNumber == serial);
 
                 int socState = 0;
-                if (!int.TryParse(e.New.State, out socState)) // state may be "unavailable"
-                    socState = 0;
-
-                if (found != null)
+                if (int.TryParse(e.New.State, out socState)) // state may be "unavailable"
                     found.StateOfCharge = socState;
 
 #if DEBUG
@@ -270,7 +382,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
             // Sometimes the batteries just don't obey what they are told, despite the request succeeding, if their power is off from their supposed state, after giving it time to reach it, just issue command to supposed state again
             foreach (var item in _batteries.Where(x => Math.Abs(x.LastKnownState - x.CurrentReportedPower) > 50 && (DateTimeOffset.Now - x.LastKnownStateTime) < TimeSpan.FromSeconds(10)))
             {
-                Console.WriteLine($"Battery state missmatch {item.NetworkAddress}: {item.LastKnownState} !=  {item.CurrentReportedPower}");
+                Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} Battery state missmatch {item.NetworkAddress}: LastCmd:{item.LastKnownState} != CurState:{item.CurrentReportedPower}");
                 // This one's state that we told it to do, and its actual power is off, tell it again to go where we told it
                 SendPowerCommand(item, item.LastKnownState, true);
             }
@@ -279,7 +391,11 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
 
         async Task<string> DetermineNewIPAddress(BatteryInfo target)
         {
-            string[] test = target.SerialNumber.EndsWith("800780S") ? ["http://10.0.2.244:8080", "http://10.0.2.245:8080", "http://10.0.2.246:8080"] : ["http://10.0.2.76:8080"];
+            string[] test = 
+                target.SerialNumber.EndsWith("800780S") ?
+                    ["http://10.0.2.244:8080", "http://10.0.2.245:8080", "http://10.0.2.246:8080"]
+                : 
+                    ["http://10.0.2.76:8080", "http://10.0.2.210:8080"];
 
 
             var tasks = test.Select(x =>
@@ -339,7 +455,6 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
             Console.WriteLine("\tTxt : [{0}]", string.Join(", ", service.Txt));
         }
 
-        static readonly int MinimumSoC = 10;
 
 
         enum BatteryMode
@@ -348,174 +463,6 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
             Charging = 1,
             Discharging = 2
         }
-
-
-        void OnBatteryModeSwitched(BatteryInfo target, BatteryMode mode, float powerWatts)
-        {
-            if (target.LastKnownState <= 0 && powerWatts > 50) // Was discharging or standby, and switched into charging
-            {
-                target.TimeOfLastSwitchToChargeMode = DateTimeOffset.Now;
-            }
-
-            if (target.IsFullyCharged && mode == BatteryMode.Discharging && powerWatts < -50)
-            {
-                // If we commanded discharge, we have to assume its no longer fully charged
-                target.IsFullyCharged = false;
-                Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} Device {target.NetworkAddress} is no longer fully charged");
-            }
-
-            if (target.LastKnownState == powerWatts) // Count how many times we sent the same command
-                target.LastKnownStateConfirmCounter++;
-            else
-                target.LastKnownStateConfirmCounter = 0;
-
-            target.LastKnownState = powerWatts;
-            target.LastKnownStateTime = DateTimeOffset.Now;
-            target.IsStandby = mode == BatteryMode.Standby;
-            if (powerWatts != 0)
-                target.LastActive = DateTimeOffset.Now; // For determining when to send into standby
-
-
-
-            if (target == _batteries.First())
-                _entityManager.SetStateAsync("sensor.netdaemon_batterycommand_bat1", $"{powerWatts}");
-            else
-                _entityManager.SetStateAsync("sensor.netdaemon_batterycommand_bat2", $"{powerWatts}");
-
-
-
-
-        }
-
-        // powerWatts is negative, for battery to discharge, positive for battery to charge
-        void SendPowerCommand(BatteryInfo target, float powerWatts, bool forceSend = false)
-        {
-            // curl -g -X POST -H "Content-Type: application/json" "http://192.168.31.213:8080/rpc/Indevolt.SetData?config={\"f\":16,\"t\":47015,\"v\":[2,700,5]}"
-
-            if (Math.Abs(powerWatts) < 50)
-                powerWatts = 0;
-
-            // We want to not repeatedly send the same state, but also the battery doesn't always obey when its only sent once, so we send the same state up to 3 times before we stop
-            if (target.LastKnownState == powerWatts && target.LastKnownStateConfirmCounter > 2 && !forceSend)
-                return; // No change
-
-            // The mode's behaviors at 0 load are different. Standby does 0w (but clicks relays every time its switched to/from), charging does 30w, and discharging does 0 without clicking relays. I suspect discharge consumes power out of the batter instead
-            //BatteryMode targetMode = powerWatts == 0 ? BatteryMode.Standby : (powerWatts > 0 ? BatteryMode.Charging : BatteryMode.Discharging); // 0=standby, 1=charging, 2=discharging
-            BatteryMode targetMode = powerWatts == 0 ? BatteryMode.Discharging : (powerWatts > 0 ? BatteryMode.Charging : BatteryMode.Discharging); // 0=standby, 1=charging, 2=discharging
-
-
-            var postContent = new
-            {
-                f = 16,
-                t = 47015,
-                v = new int[]
-                {
-                    (int)targetMode,
-                    (int) Math.Round(Math.Abs(powerWatts)),
-                    powerWatts > 0 ? 100 : MinimumSoC // Charge to 100%, discharge to 20%
-                }
-            };
-
-            Task.Run(async () =>
-            {
-                if (forceSend) // Actually wait, for a lease to become available
-                {
-                    using RateLimitLease lease = await target._rateLimiter.AcquireAsync(1);
-
-                    if (lease.IsAcquired) // We may have been dropped, because another force send won
-                    {
-                        if (target.LastKnownState == powerWatts) // While we were waiting, it already got to where we wanted it?
-                            return;
-
-                        Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} Forced power command {target.NetworkAddress} from {target.LastKnownState} to {powerWatts}");
-                        SendPowerCommandInternal(target, powerWatts, targetMode, postContent);
-                    }
-                }
-                else // Try to send if rate limiter allows, if not then just drop it
-                {
-                    using RateLimitLease lease = target._rateLimiter.AttemptAcquire(1);
-
-                    if (lease.IsAcquired)
-                    {
-                        SendPowerCommandInternal(target, powerWatts, targetMode, postContent);
-                    }
-                    else
-                    {
-#if DEBUG
-                        Console.WriteLine($"[DROPPED] Set {target.NetworkAddress} to {powerWatts}");
-#endif
-                    }
-                }
-
-
-            });
-        }
-
-        private async void SendPowerCommandInternal(BatteryInfo target, float powerWatts, BatteryMode targetMode, object postContent)
-        {
-            var request = new HttpRequestMessage(HttpMethod.Post, $"{target.NetworkAddress}/rpc/Indevolt.SetData?config={JsonSerializer.Serialize(postContent)}");
-
-#if DEBUG
-            Console.WriteLine($"Set {target.NetworkAddress} to {powerWatts}");
-#endif
-            try
-            {
-#if DEBUG
-                Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} Send... {target.NetworkAddress}");
-#endif
-                var resp = await _httpClient.SendAsync(request);
-                //await resp.Content.ReadAsStringAsync();
-#if DEBUG
-                Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} Sent {target.NetworkAddress} {resp.StatusCode} {await resp.Content.ReadAsStringAsync()}");
-#endif
-                if (resp.StatusCode == HttpStatusCode.BadGateway) // In HomeAssistant this runs through a proxy, that will not fail, but report a BadGateway
-                {
-                    Console.WriteLine($"Failed to send {target.NetworkAddress}: {resp.StatusCode}");
-                    target.ConsequtiveRequestFailCount++;
-                    return;
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Failed to send {target.NetworkAddress}: {ex.Message}");
-                target.ConsequtiveRequestFailCount++;
-                return;
-            }
-
-            // Successfully changed it
-            OnBatteryModeSwitched(target, targetMode, powerWatts);
-            target.ConsequtiveRequestFailCount = 0;
-        }
-
-        void SendStandbyCommand(BatteryInfo target)
-        {
-            if (target.IsStandby)
-                return;
-
-            var postContent = new
-            {
-                f = 16,
-                t = 47015,
-                v = new int[]
-                {
-                    0, // 0=standby, 1=charging, 2=discharging
-                    (int) 0,
-                    100
-                }
-            };
-
-            Task.Run(async () =>
-            {
-                using RateLimitLease lease = await target._rateLimiter.AcquireAsync(1);
-
-//#if DEBUG
-                Console.WriteLine($"{DateTimeOffset.Now: HH:mm:ss.fff} Set {target.NetworkAddress} to STANDBY");
-//#endif
-
-                SendPowerCommandInternal(target, 0, BatteryMode.Standby, postContent);
-            });
-        }
-
 
         List<(BatteryInfo, float)> DistributePower(int powerWatts)
         {
@@ -541,7 +488,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
 
                     // If lowest battery is more than 5% away from highest one, put all into that one first
 
-                    if (batteries.Min(x => x.StateOfCharge) < batteries.Max(x => x.StateOfCharge) - 5)
+                    if (MaximumChargeSoCDelta != 0 && (batteries.Min(x => x.StateOfCharge) < batteries.Max(x => x.StateOfCharge) - MaximumChargeSoCDelta))
                     {
                         var batteryToUse = batteries.MinBy(x => x.StateOfCharge)!;
 
@@ -559,7 +506,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
                     // Batteries are close together, if we don't have enough power, we just give it to first
                     // We need a bit of space here to decide when to switch from one battery to multiple, or from multiple to one
                     // Otherwise if we are around the limit, we end up flipping back and forth
-					
+
                     bool multiBatteryMode = false;
                     var countActiveBatteries = batteries.Count(x => x.LastKnownState > 50); // Batteries that do more than 50w (which is the minimum) charge
 
@@ -577,6 +524,9 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
                         if (powerWatts > 400)
                             multiBatteryMode = true;
                     }
+
+                    if (SingleBatteryChargeMode)
+                        multiBatteryMode = false;
 
                     if (multiBatteryMode)
                     {
@@ -686,6 +636,183 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
             return result;
         }
 
+
+        void OnBatteryModeSwitched(BatteryInfo target, BatteryMode mode, float powerWatts)
+        {
+            if (target.LastKnownState <= 0 && powerWatts > 50) // Was discharging or standby, and switched into charging
+            {
+                target.TimeOfLastSwitchToChargeMode = DateTimeOffset.Now;
+            }
+
+            if (target.IsFullyCharged && mode == BatteryMode.Discharging && powerWatts < -50)
+            {
+                // If we commanded discharge, we have to assume its no longer fully charged
+                target.IsFullyCharged = false;
+                Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} Device {target.NetworkAddress} is no longer fully charged");
+            }
+
+            if (target.LastKnownState == powerWatts) // Count how many times we sent the same command
+                target.LastKnownStateConfirmCounter++;
+            else
+                target.LastKnownStateConfirmCounter = 0;
+
+            target.LastKnownState = powerWatts;
+            target.LastKnownStateTime = DateTimeOffset.Now;
+            target.IsStandby = mode == BatteryMode.Standby;
+            if (powerWatts != 0)
+                target.LastActive = DateTimeOffset.Now; // For determining when to send into standby
+
+
+
+            if (target == _batteries.First())
+                _entityManager.SetStateAsync("sensor.battery_control_batterycommand_bat1", $"{powerWatts}");
+            else
+                _entityManager.SetStateAsync("sensor.battery_control_batterycommand_bat2", $"{powerWatts}");
+
+
+
+
+        }
+
+        // powerWatts is negative, for battery to discharge, positive for battery to charge
+        void SendPowerCommand(BatteryInfo target, float powerWatts, bool forceSend = false)
+        {
+            // curl -g -X POST -H "Content-Type: application/json" "http://192.168.31.213:8080/rpc/Indevolt.SetData?config={\"f\":16,\"t\":47015,\"v\":[2,700,5]}"
+
+            if (Math.Abs(powerWatts) < 50)
+                powerWatts = 0;
+
+            // We want to not repeatedly send the same state (or very close), but also the battery doesn't always obey when its only sent once, so we send the same state up to 3 times before we stop
+            if (Math.Abs(target.LastKnownState - powerWatts) < 10 && target.LastKnownStateConfirmCounter > 2 && !forceSend)
+                return; // No change
+
+            // The mode's behaviors at 0 load are different. Standby does 0w (but clicks relays every time its switched to/from), charging does 30w, and discharging does 0 without clicking relays. I suspect discharge consumes power out of the batter instead
+            //BatteryMode targetMode = powerWatts == 0 ? BatteryMode.Standby : (powerWatts > 0 ? BatteryMode.Charging : BatteryMode.Discharging); // 0=standby, 1=charging, 2=discharging
+            BatteryMode targetMode = powerWatts == 0 ? BatteryMode.Discharging : (powerWatts > 0 ? BatteryMode.Charging : BatteryMode.Discharging); // 0=standby, 1=charging, 2=discharging
+
+
+            var postContent = new
+            {
+                f = 16,
+                t = 47015,
+                v = new int[]
+                {
+                    (int)targetMode,
+                    (int) Math.Round(Math.Abs(powerWatts)),
+                    powerWatts > 0 ? 100 : MinimumSoC // Charge to 100%, discharge to 20%
+                }
+            };
+
+            Task.Run(async () =>
+            {
+                if (forceSend) // Actually wait, for a lease to become available
+                {
+                    using RateLimitLease lease = await target._rateLimiter.AcquireAsync(1);
+
+                    if (lease.IsAcquired) // We may have been dropped, because another force send won
+                    {
+                        if (target.LastKnownState == powerWatts) // While we were waiting, it already got to where we wanted it?
+                            return;
+
+                        Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} Forced power command {target.NetworkAddress} from {target.LastKnownState} to {powerWatts}");
+                        SendPowerCommandInternal(target, powerWatts, targetMode, postContent);
+                    }
+                }
+                else // Try to send if rate limiter allows, if not then just drop it
+                {
+                    using RateLimitLease lease = target._rateLimiter.AttemptAcquire(1);
+
+                    if (lease.IsAcquired)
+                    {
+                        SendPowerCommandInternal(target, powerWatts, targetMode, postContent);
+                    }
+                    else
+                    {
+#if DEBUG
+                        Console.WriteLine($"[DROPPED] Set {target.NetworkAddress} to {powerWatts}");
+#endif
+                    }
+                }
+
+
+            });
+        }
+
+        private async void SendPowerCommandInternal(BatteryInfo target, float powerWatts, BatteryMode targetMode, object postContent)
+        {
+            var request = new HttpRequestMessage(HttpMethod.Post, $"{target.NetworkAddress}/rpc/Indevolt.SetData?config={JsonSerializer.Serialize(postContent)}");
+
+#if DEBUG
+            Console.WriteLine($"Set {target.NetworkAddress} to {powerWatts}");
+#endif
+            try
+            {
+#if DEBUG
+                Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} Send... {target.NetworkAddress}");
+#endif
+                var resp = await _httpClient.SendAsync(request);
+                //await resp.Content.ReadAsStringAsync();
+#if DEBUG
+                Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} Sent {target.NetworkAddress} {resp.StatusCode} {await resp.Content.ReadAsStringAsync()}");
+#endif
+                if (resp.StatusCode == HttpStatusCode.BadGateway) // In HomeAssistant this runs through a proxy, that will not fail, but report a BadGateway
+                {
+                    Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} Failed to send {target.NetworkAddress}: {resp.StatusCode}");
+                    target.ConsequtiveRequestFailCount++;
+                    return;
+                }
+
+                var respText = await resp.Content.ReadAsStringAsync();
+
+                //Console.WriteLine(respText);
+                if (!respText.Contains("true"))
+                {
+                    Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} {target.NetworkAddress} refused new setting. Tried from {target.LastKnownState} to {powerWatts}");
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} Failed to send {target.NetworkAddress}: {ex.Message}");
+                target.ConsequtiveRequestFailCount++;
+                return;
+            }
+
+            // Successfully changed it
+            OnBatteryModeSwitched(target, targetMode, powerWatts);
+            target.ConsequtiveRequestFailCount = 0;
+        }
+
+        void SendStandbyCommand(BatteryInfo target)
+        {
+            if (target.IsStandby)
+                return;
+
+            var postContent = new
+            {
+                f = 16,
+                t = 47015,
+                v = new int[]
+                {
+                    0, // 0=standby, 1=charging, 2=discharging
+                    (int) 0,
+                    100
+                }
+            };
+
+            Task.Run(async () =>
+            {
+                using RateLimitLease lease = await target._rateLimiter.AcquireAsync(1);
+
+//#if DEBUG
+                Console.WriteLine($"{DateTimeOffset.Now: HH:mm:ss.fff} Set {target.NetworkAddress} to STANDBY");
+//#endif
+
+                SendPowerCommandInternal(target, 0, BatteryMode.Standby, postContent);
+            });
+        }
+
+
         // powerWatts is negative, for battery to discharge, positive for battery to charge
         public void SetBatteryPower(float powerWatts, bool forceSend = false)
         {
@@ -695,18 +822,12 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
             if (powerWatts < 0 && powerWatts > -50)
                 powerWatts = -50;
 
-            // If we want to charge, we only ever charge from Solar, so we can never charge at more power than we have solar
-            // Protects against negative power spikes, when a big load falls away, overshooting us into a charge instead of putting us at zero
-            if (powerWatts > 0 && powerWatts > CurrentSolarPower)
-                powerWatts = Math.Clamp(CurrentSolarPower - 80, 0, 1200); // And leave some gap for the house base load
+            // We cannot do less than 50w charge, so lets idle instead (alternative is charging more than requested, which would cause grid import)
+            if (powerWatts > 0 && powerWatts < -0)
+                powerWatts = 0; // Standby the battery instead
 
-            // The minimum charge we can do is 100w (actually 120w on plug), we never want to overcharge
-            //if (powerWatts > 0 && powerWatts < 110)
-            //    powerWatts = 0; // Standby the battery instead
-
-
-                //Console.WriteLine($"Battery command to {powerWatts}, force {forceSend}");
-                // We need to choose which batteries to task
+            //Console.WriteLine($"Battery command to {powerWatts}, force {forceSend}");
+            // We need to choose which batteries to task
 
             var split = DistributePower((int)powerWatts);
 

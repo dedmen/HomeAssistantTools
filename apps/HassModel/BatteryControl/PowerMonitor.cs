@@ -1,4 +1,7 @@
-﻿using Microsoft.Extensions.Configuration;
+﻿using Microsoft.AspNetCore.Components.Forms;
+using Microsoft.AspNetCore.Mvc.Routing;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Options;
 using NetDaemon.Extensions.MqttEntityManager;
 using NetDaemon.HassModel.Entities;
 using Org.BouncyCastle.Asn1.X509;
@@ -7,6 +10,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Net;
+using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
 using System.Text;
 using System.Threading;
@@ -31,7 +35,19 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
         private static readonly float InstantCorrectionThreshold = 100; 
 
         AdaptivePowerFilter _filter = new AdaptivePowerFilter(0, 150);
-        
+        private ShellyEmulator _shellyEmulator;
+
+        private float MeterTargetPower = -50;
+        private float MinimumBatteryPower = 0;
+
+        private float MaximumChargePower = 1200;
+        private float MaximumDischargePower = 2400;
+
+        private bool UseFilter = false;
+        private bool UseFalseReadingDetection = false;
+        private bool LogFalseReadingDetection = false;
+        private int FalseReadingDetectionMaxIgnoreCount = 1;
+
         public readonly TokenBucketRateLimiter _rateLimiter = new TokenBucketRateLimiter(new TokenBucketRateLimiterOptions
         {
             TokenLimit = 1,                  // Maximum burst capacity
@@ -66,6 +82,11 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
             }
         }
 
+        public class PowerEntityGridMeter : PowerEntity
+        {
+            public int FalseReadingIgnoredCount = 0;
+        }
+
         private readonly Dictionary<string, PowerEntity> _powerMeters = new();
 
         private readonly (string, PowerEntity.PowerType)[] _powerMetersNames =
@@ -78,7 +99,6 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
             ("sensor.oven_power_2", PowerEntity.PowerType.Load)
         ];
 
-        private ShellyEmulator _shellyEmulator;
 
         public PowerMonitor(IHaContext ha, IConfiguration cfg, IMqttEntityManager entityManager)
         {
@@ -95,26 +115,299 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
         {
             await _batteryController.InitializeAsync(cancellationToken);
 
-            await _entityManager.CreateAsync("sensor.netdaemon_targetpower", new EntityCreationOptions { Name = "Power Monitor Wanted Target", DeviceClass = "power", }, new
-            {
-                unit_of_measurement = "W",
-                icon = "mdi:weather-sunset-up",
-                state_class = "measurement"
-            }).ConfigureAwait(false);
+            _entityManager.RemoveAsync("number.netdaemon_miniumum_battery_power");
 
-            await _entityManager.CreateAsync("sensor.netdaemon_batterycommand", new EntityCreationOptions { Name = "Battery commanded Target", DeviceClass = "power", }, new
-            {
-                unit_of_measurement = "W",
-                icon = "mdi:weather-sunset-up",
-                state_class = "measurement"
-            }).ConfigureAwait(false);
+            /// Generate Home Assistant entities for control and monitoring
 
-            await _entityManager.CreateAsync("sensor.netdaemon_deltatotarget", new EntityCreationOptions { Name = "Power Monitor Delta To Target", DeviceClass = "power", }, new
+            // Monitoring displays
             {
-                unit_of_measurement = "W",
-                icon = "mdi:weather-sunset-up",
-                state_class = "measurement"
-            }).ConfigureAwait(false);
+                await _entityManager.CreateAsync("sensor.battery_control_targetpower", new EntityCreationOptions { Name = "Power Monitor Wanted Target", DeviceClass = "power", }, new
+                {
+                    unit_of_measurement = "W",
+                    icon = "mdi:power-settings",
+                    state_class = "measurement",
+                    state_topic = "homeassistant/sensor/battery_control_targetpower/state",
+                    device = new { identifiers = new[] { "battery_control" }, name = "Battery Control", model = "SuperDuper Mk2", manufacturer = "Dedmen", sw_version = 1.00 }
+                }).ConfigureAwait(false);
+
+                await _entityManager.CreateAsync("sensor.battery_control_batterycommand", new EntityCreationOptions { Name = "Battery commanded Target", DeviceClass = "power", }, new
+                {
+                    unit_of_measurement = "W",
+                    icon = "mdi:battery-charging-wireless",
+                    state_class = "measurement",
+                    state_topic = "homeassistant/sensor/battery_control_batterycommand/state",
+                    device = new { identifiers = new[] { "battery_control" }, name = "Battery Control", model = "SuperDuper Mk2", manufacturer = "Dedmen", sw_version = 1.00 }
+                }).ConfigureAwait(false);
+
+                await _entityManager.CreateAsync("sensor.battery_control_deltatotarget", new EntityCreationOptions { Name = "Power Monitor Delta To Target", DeviceClass = "power", }, new
+                {
+                    unit_of_measurement = "W",
+                    icon = "mdi:delta",
+                    state_class = "measurement",
+                    state_topic = "homeassistant/sensor/battery_control_deltatotarget/state",
+                    device = new { identifiers = new[] { "battery_control" }, name = "Battery Control", model = "SuperDuper Mk2", manufacturer = "Dedmen", sw_version = 1.00 }
+                }).ConfigureAwait(false);
+
+
+
+            }
+
+
+            // Control inputs
+            {
+                // Meter value target
+                {
+                    await _entityManager.CreateAsync("number.battery_control_meter_target", new EntityCreationOptions(Name: "MeterTarget", Persist: true), new
+                    {
+                        min = -100,
+                        max = 50,
+                        step = 1.0,
+                        mode = "box", // Can be "box" or "slider"
+                        unit_of_measurement = "W",
+                        icon = "mdi:meter-electric-outline",
+
+                        state_topic = "homeassistant/number/battery_control_meter_target/state",
+                        device = new { identifiers = new[] { "battery_control" }, name = "Battery Control", model = "SuperDuper Mk2", manufacturer = "Dedmen", sw_version = 1.00 }
+                    }).ConfigureAwait(false);
+
+                    {
+                        var commandSubscription = await _entityManager.PrepareCommandSubscriptionAsync("number.battery_control_meter_target").ConfigureAwait(false);
+
+                        commandSubscription.Subscribe(async commandReceived =>
+                        {
+                            // Try parsing the incoming string into a valid double
+                            if (float.TryParse(commandReceived, out float parsedValue))
+                            {
+                                await _entityManager.SetStateAsync("number.battery_control_meter_target", commandReceived).ConfigureAwait(false);
+                                MeterTargetPower = parsedValue;
+                            }
+                        });
+
+                        if (float.TryParse(_ha.GetState("number.battery_control_meter_target")?.State ?? "-50", out float parsedValue))
+                        {
+                            MeterTargetPower = parsedValue;
+                        }
+                    }
+                }
+
+                // Ability to force battery to charge or discharge
+                {
+                    await _entityManager.CreateAsync("number.battery_control_miniumum_battery_power", new EntityCreationOptions(Name: "Minimum Battery Power", Persist: true), new
+                    {
+                        min = -2400,
+                        max = 1200,
+                        step = 1.0,
+                        mode = "box", // Can be "box" or "slider"
+                        unit_of_measurement = "W",
+                        icon = "mdi:battery-charging-medium",
+
+
+                        state_topic = "homeassistant/number/battery_control_miniumum_battery_power/state",
+                        device = new { identifiers = new[] { "battery_control" }, name = "Battery Control", model = "SuperDuper Mk2", manufacturer = "Dedmen", sw_version = 1.00 }
+                    }).ConfigureAwait(false);
+
+                    {
+                        var commandSubscription = await _entityManager.PrepareCommandSubscriptionAsync("number.battery_control_miniumum_battery_power").ConfigureAwait(false);
+
+                        commandSubscription.Subscribe(async commandReceived =>
+                        {
+                            // Try parsing the incoming string into a valid double
+                            if (float.TryParse(commandReceived, out float parsedValue))
+                            {
+                                await _entityManager.SetStateAsync("number.battery_control_miniumum_battery_power", commandReceived).ConfigureAwait(false);
+                                MinimumBatteryPower = parsedValue;
+
+                                lock (_rateLimiter)
+                                {
+                                    OnUpdate();
+                                }
+                            }
+                        });
+
+                        if (float.TryParse(_ha.GetState("number.battery_control_miniumum_battery_power")?.State ?? "0", out float parsedValue))
+                        {
+                            MinimumBatteryPower = parsedValue;
+                        }
+                    }
+                }
+
+                // Maximum Charge Power
+                {
+                    await _entityManager.CreateAsync("number.battery_control_maximum_charge_power", new EntityCreationOptions(Name: "Maximum Charge Power", Persist: true), new
+                    {
+                        min = 0,
+                        max = 1200,
+                        step = 1.0,
+                        mode = "box", // Can be "box" or "slider"
+                        unit_of_measurement = "W",
+                        icon = "mdi:battery-charging-100",
+
+                        state_topic = "homeassistant/number/battery_control_maximum_charge_power/state",
+                        device = new { identifiers = new[] { "battery_control" }, name = "Battery Control", model = "SuperDuper Mk2", manufacturer = "Dedmen", sw_version = 1.00 }
+                    }).ConfigureAwait(false);
+
+                    {
+                        var commandSubscription = await _entityManager.PrepareCommandSubscriptionAsync("number.battery_control_maximum_charge_power").ConfigureAwait(false);
+
+                        commandSubscription.Subscribe(async commandReceived =>
+                        {
+                            // Try parsing the incoming string into a valid double
+                            if (float.TryParse(commandReceived, out float parsedValue))
+                            {
+                                await _entityManager.SetStateAsync("number.battery_control_maximum_charge_power", commandReceived).ConfigureAwait(false);
+                                MaximumChargePower = parsedValue;
+
+                                lock (_rateLimiter)
+                                {
+                                    OnUpdate();
+                                }
+                            }
+                        });
+
+                        if (float.TryParse(_ha.GetState("number.battery_control_maximum_charge_power")?.State ?? "1200", out float parsedValue))
+                        {
+                            MaximumChargePower = parsedValue;
+                        }
+                    }
+                }
+
+                // Maximum Discharge Power
+                {
+                    await _entityManager.CreateAsync("number.battery_control_maximum_discharge_power", new EntityCreationOptions(Name: "Maximum Discharge Power", Persist: true), new
+                    {
+                        min = 0,
+                        max = 2400,
+                        step = 1.0,
+                        mode = "box", // Can be "box" or "slider"
+                        unit_of_measurement = "W",
+                        icon = "mdi:battery-charging-10",
+
+                        state_topic = "homeassistant/number/battery_control_maximum_discharge_power/state",
+                        device = new { identifiers = new[] { "battery_control" }, name = "Battery Control", model = "SuperDuper Mk2", manufacturer = "Dedmen", sw_version = 1.00 }
+                    }).ConfigureAwait(false);
+
+                    {
+                        var commandSubscription = await _entityManager.PrepareCommandSubscriptionAsync("number.battery_control_maximum_discharge_power").ConfigureAwait(false);
+
+                        commandSubscription.Subscribe(async commandReceived =>
+                        {
+                            // Try parsing the incoming string into a valid double
+                            if (float.TryParse(commandReceived, out float parsedValue))
+                            {
+                                await _entityManager.SetStateAsync("number.battery_control_maximum_discharge_power", commandReceived).ConfigureAwait(false);
+                                MaximumDischargePower = parsedValue;
+
+                                lock (_rateLimiter)
+                                {
+                                    OnUpdate();
+                                }
+                            }
+                        });
+
+                        if (float.TryParse(_ha.GetState("number.battery_control_maximum_discharge_power")?.State ?? "2400", out float parsedValue))
+                        {
+                            MaximumDischargePower = parsedValue;
+                        }
+                    }
+                }
+
+                // Use PD Filter
+                {
+                    await _entityManager.CreateAsync("switch.battery_control_use_pd_filter", new EntityCreationOptions { DeviceClass = "switch", Name = "Use PD Filter", PayloadOn = "on", PayloadOff = "off" }, new
+                    {
+                        icon = "mdi:filter-cog",
+                        state_topic = "homeassistant/switch/battery_control_use_pd_filter/state",
+                        device = new { identifiers = new[] { "battery_control" }, name = "Battery Control", model = "SuperDuper Mk2", manufacturer = "Dedmen", sw_version = 1.00 }
+                    }).ConfigureAwait(false);
+
+                    var commandSubscription = await _entityManager.PrepareCommandSubscriptionAsync("switch.battery_control_use_pd_filter").ConfigureAwait(false);
+
+                    commandSubscription.Subscribe(async commandReceived =>
+                   {
+                       await _entityManager.SetStateAsync("switch.battery_control_use_pd_filter", commandReceived).ConfigureAwait(false);
+                       UseFilter = commandReceived == "on";
+                   });
+
+                   UseFilter = (_ha.GetState("number.battery_control_use_pd_filter")?.State ?? "off") == "on";
+                }
+
+                // Use False reading detection
+                {
+                    await _entityManager.CreateAsync("switch.battery_control_use_false_reading_detection", new EntityCreationOptions { DeviceClass = "switch", Name = "Use False reading detection", PayloadOn = "on", PayloadOff = "off" }, new
+                    {
+                        //icon = "mdi:filter-cog",
+                        state_topic = "homeassistant/switch/battery_control_use_false_reading_detection/state",
+                        device = new { identifiers = new[] { "battery_control" }, name = "Battery Control", model = "SuperDuper Mk2", manufacturer = "Dedmen", sw_version = 1.00 }
+                    }).ConfigureAwait(false);
+
+                    var commandSubscription = await _entityManager.PrepareCommandSubscriptionAsync("switch.battery_control_use_false_reading_detection").ConfigureAwait(false);
+
+                    commandSubscription.Subscribe(async commandReceived =>
+                    {
+                        await _entityManager.SetStateAsync("switch.battery_control_use_false_reading_detection", commandReceived).ConfigureAwait(false);
+                        UseFalseReadingDetection = commandReceived == "on";
+                    });
+
+                    UseFalseReadingDetection = (_ha.GetState("number.battery_control_use_false_reading_detection")?.State ?? "off") == "on";
+                }
+
+                // Log False reading detection
+                {
+                    await _entityManager.CreateAsync("switch.battery_control_log_false_reading_detection", new EntityCreationOptions { DeviceClass = "switch", Name = "Log False reading detection", PayloadOn = "on", PayloadOff = "off" }, new
+                    {
+                        //icon = "mdi:filter-cog",
+                        state_topic = "homeassistant/switch/battery_control_log_false_reading_detection/state",
+                        device = new { identifiers = new[] { "battery_control" }, name = "Battery Control", model = "SuperDuper Mk2", manufacturer = "Dedmen", sw_version = 1.00 }
+                    }).ConfigureAwait(false);
+
+                    var commandSubscription = await _entityManager.PrepareCommandSubscriptionAsync("switch.battery_control_log_false_reading_detection").ConfigureAwait(false);
+
+                    commandSubscription.Subscribe(async commandReceived =>
+                    {
+                        await _entityManager.SetStateAsync("switch.battery_control_log_false_reading_detection", commandReceived).ConfigureAwait(false);
+                        LogFalseReadingDetection = commandReceived == "on";
+                    });
+
+                    LogFalseReadingDetection = (_ha.GetState("number.battery_control_log_false_reading_detection")?.State ?? "off") == "on";
+                }
+
+                // False reading detection max ignore count
+                {
+                    await _entityManager.CreateAsync("number.battery_control_false_reading_detection_max_ignores", new EntityCreationOptions(Name: "False reading detection max ignore count", Persist: true), new
+                    {
+                        min = 1,
+                        max = 6,
+                        step = 1.0,
+                        mode = "slider",
+                        //icon = "mdi:battery-charging-10",
+
+                        state_topic = "homeassistant/number/battery_control_false_reading_detection_max_ignores/state",
+                        device = new { identifiers = new[] { "battery_control" }, name = "Battery Control", model = "SuperDuper Mk2", manufacturer = "Dedmen", sw_version = 1.00 }
+                    }).ConfigureAwait(false);
+
+                    {
+                        var commandSubscription = await _entityManager.PrepareCommandSubscriptionAsync("number.battery_control_false_reading_detection_max_ignores").ConfigureAwait(false);
+
+                        commandSubscription.Subscribe(async commandReceived =>
+                        {
+                            // Try parsing the incoming string into a valid double
+                            if (int.TryParse(commandReceived, out var parsedValue))
+                            {
+                                await _entityManager.SetStateAsync("number.battery_control_false_reading_detection_max_ignores", commandReceived).ConfigureAwait(false);
+                                FalseReadingDetectionMaxIgnoreCount = parsedValue;
+                            }
+                        });
+
+                        if (int.TryParse(_ha.GetState("number.battery_control_false_reading_detection_max_ignores")?.State ?? "1", out var parsedValue))
+                        {
+                            FalseReadingDetectionMaxIgnoreCount = parsedValue;
+                        }
+                    }
+                }
+
+            }
+
+
 
             // Energy devices
 
@@ -127,7 +420,10 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
 
                 float.TryParse(state, out var currentState); // If it fails its zero, which is fine
 
-                _powerMeters.Add(name.Item1, new PowerEntity() { PowerAtLastMeter = currentState, PowerLiveData = currentState, Type = name.Item2 });
+                if (name.Item2 == PowerEntity.PowerType.Grid)
+                    _powerMeters.Add(name.Item1, new PowerEntityGridMeter() { PowerAtLastMeter = currentState, PowerLiveData = currentState, Type = name.Item2 });
+                else
+                    _powerMeters.Add(name.Item1, new PowerEntity() { PowerAtLastMeter = currentState, PowerLiveData = currentState, Type = name.Item2 });
             }
 
             // Subscribe to their state updates
@@ -147,9 +443,85 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
                     // To fix this issue, we ignore one meter reading, if its a negative spike
                     // A sudden export spike is either a false positive, or a solar spike. We can deal with missing 10 seconds of solar, but we don't want to switch to charge mode, in the middle of night when the fridge turned on
 
+
+                    // Try to detect the wrong data with heuristics
+                    // If we expect (based on other devices) a certain power change, but the meter actually does the opposite. And the change, had it been applied correctly, would've caused a cross over zero
+
+                    // The delta between old and new state, of all monitoring devices except the meter. What we expect the meter to tell us now with its update
+                    var totalDeltaSinceLastMeter = _powerMeters.Select(x =>
+                    {
+                        if (x.Value.Type == PowerEntity.PowerType.Solar) // Solar is inverted, positive value means we are getting power, not consuming
+                            return -x.Value.GetDeltaSinceLastMeter();
+                        if (x.Value.Type == PowerEntity.PowerType.Grid)
+                            return 0;
+                        return x.Value.GetDeltaSinceLastMeter();
+                    }).Sum();
+
+                    // Delta between old and new state of meter. What the meter tells us has changed
+                    var newStateMeterDelta = newPowerState - updatedEntity.PowerAtLastMeter;
+
+                    if (Math.Abs(newPowerState) < 300) // These false readings only happen close to zero
+                    {
+
+                        // The expected delta is at least somewhat close to what the meter reported (If we expect no change, but the meter changed anyway. Something else has changed)
+
+                        var expectedVsActual = Math.Abs(Math.Abs(newStateMeterDelta) - Math.Abs(totalDeltaSinceLastMeter));
+                        var expectedVsActualPerc = expectedVsActual / ((Math.Abs(newStateMeterDelta) + Math.Abs(totalDeltaSinceLastMeter)) / 2);
+                        //Console.WriteLine($"Exp {totalDeltaSinceLastMeter} Act {newStateMeterDelta} Delt {expectedVsActual} Perc {expectedVsActualPerc}");
+                        // Are they close enough together, within tolerance?
+                        // The actual meter change, went opposite of what we expected
+                        if (expectedVsActualPerc < 0.5 &&  Math.Sign(totalDeltaSinceLastMeter) != Math.Sign(newStateMeterDelta))
+                        {
+
+                            if (LogFalseReadingDetection)
+                                Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} Meter sign missmatch. ExpDelta {totalDeltaSinceLastMeter}, MeterDelta {newStateMeterDelta}, " +
+                                        $"Expected {updatedEntity.PowerAtLastMeter}->{updatedEntity.PowerAtLastMeter + totalDeltaSinceLastMeter}. " +
+                                        $"Observed {updatedEntity.PowerAtLastMeter}->{newPowerState}");
+
+                            // The change, if applied correctly, would've crossed over zero
+                            //if (Math.Sign(newPowerState) != Math.Sign(updatedEntity.PowerAtLastMeter + totalDeltaSinceLastMeter))
+                            {
+                                // The meter didn't do what expected, and if the expected one had applied, we would've crossed zero. This is the failure mode
+
+                                if (LogFalseReadingDetection)
+                                    Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} Meter false reading detected. ExpDelta {totalDeltaSinceLastMeter}, MeterDelta {newStateMeterDelta}, " +
+                                        $"Expected {updatedEntity.PowerAtLastMeter}->{updatedEntity.PowerAtLastMeter + totalDeltaSinceLastMeter}. " +
+                                        $"Observed {updatedEntity.PowerAtLastMeter}->{newPowerState}");
+
+
+
+
+                                // We need to update the PowerAtLastMeter though, so that if the next reading still reports same, we don't fall into here again
+                                //updatedEntity.PowerAtLastMeter = newPowerState;
+
+                                var gridMeter = updatedEntity as PowerEntityGridMeter;
+                                gridMeter.FalseReadingIgnoredCount++;
+                                if (gridMeter.FalseReadingIgnoredCount >= FalseReadingDetectionMaxIgnoreCount)
+                                {
+                                    gridMeter.FalseReadingIgnoredCount = 0;
+                                }
+                                else
+                                {
+                                    return; // Ignore this update
+                                }
+                            }
+                        }
+
+
+
+
+
+                    }
+
+
+
+
+
+
+
                     // We were already in discharge
                     // A greater than 100w jump, into more grid export
-                    if (updatedEntity.PowerAtLastMeter < 0 && (newPowerState - updatedEntity.PowerAtLastMeter) < -100)
+                    if (updatedEntity.PowerAtLastMeter < 0 && newStateMeterDelta < -100)
                     {
                         Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} Sudden grid meter spike from {updatedEntity.PowerAtLastMeter} to {newPowerState}, ignoring spike");
                         // We need to update the PowerAtLastMeter though, so that if the next reading still reports same, we don't fall into here again
@@ -184,6 +556,43 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
 
         }
 
+        private float ApplyLimitsPreFilter(float input)
+        {
+            var currentSolarPower = _powerMeters.Where(x => x.Value.Type == PowerEntity.PowerType.Solar).Select(x => x.Value.PowerLiveData).Sum();
+
+            // If we charge, we charge from solar power. Never allow more charging than we have solar
+
+            // If we want to charge, we only ever charge from Solar, so we can never charge at more power than we have solar
+            // Protects against negative power spikes, when a big load falls away, overshooting us into a charge instead of putting us at zero
+            if (input > 0 && input > currentSolarPower)
+                input = Math.Clamp(currentSolarPower - 80, 0, 1200); // And leave some gap for the house base load
+
+            return input;
+        }
+
+        private float ApplyLimitsPostFilter(float input)
+        {
+            // The battery has deadband between -50 and 50 watts. If we want to discharge, we need at least 50w, if we want to charge, we need at least 50w
+
+            if (input > 0 && input < 50)
+                input = 0; // We wanted to charge between 0-50w, the battery cannot do that. So lets leave it idle.
+
+            if (input < 0 && input > -50)
+                input = -50; // We wanted to discharge, lets bump it up to the minimum required discharge power, we waste some grid export, but thats better than importing
+
+            input = MinimumBatteryPower switch
+            {
+                < 0 => Math.Min(input, MinimumBatteryPower), // Forced discharge
+                > 0 => Math.Max(input, MinimumBatteryPower), // Forced charge
+                _ => input                                   // No change if zero
+            };
+
+            // Power limits
+            input = Math.Clamp(input, -MaximumDischargePower, MaximumChargePower);
+
+            return input;
+        }
+
 
         private void OnUpdate()
         {
@@ -211,13 +620,11 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
 
             var currentMeter = lastMeter + totalDeltaSinceLastMeter;
 
-            var meterTarget = totalPlugLoad < 50 ? -10 : -50; // This is the watts we want to see on the meter. Slight export
-
-
+            var meterTarget = MeterTargetPower;
 
             var deltaToTarget = meterTarget - currentMeter;
 
-            _entityManager.SetStateAsync("sensor.netdaemon_deltatotarget", $"{deltaToTarget}");
+            _entityManager.SetStateAsync("sensor.battery_control_deltatotarget", $"{deltaToTarget}");
             var currentBatteryLoad = _powerMeters.Where(x => x.Value.Type == PowerEntity.PowerType.Battery).Select(x => x.Value.PowerLiveData).Sum();
 
             // Give the batteries a new target, such that we get to our meterTarget
@@ -233,21 +640,33 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
                 Console.WriteLine($"{DateTimeOffset.Now: HH:mm:ss.fff} Battery to {currentBatteryLoad + deltaToTarget} ({currentBatteryLoad} + {deltaToTarget}), Rate Limit {rateLimitTicket.IsAcquired}");
 #endif
 
-                _entityManager.SetStateAsync("sensor.netdaemon_targetpower", $"{currentBatteryLoad + deltaToTarget}");
+                _entityManager.SetStateAsync("sensor.battery_control_targetpower", $"{currentBatteryLoad + deltaToTarget}");
 
-                var commandPower = _filter.Filter(currentBatteryLoad + deltaToTarget); // We want to run the filter regularly, not just when we acquire a ticket, otherwise it updates too slowly
+                var commandPower = (currentBatteryLoad + deltaToTarget);
+
+                commandPower = ApplyLimitsPreFilter(commandPower);
+
+                var commandPowerNonFilter = commandPower;
+
+                if (UseFilter)
+                {
+                    commandPower = _filter.Filter(currentBatteryLoad + deltaToTarget); // We want to run the filter regularly, not just when we acquire a ticket, otherwise it updates too slowly
+                }
+
+                commandPower = ApplyLimitsPostFilter(commandPower);
+                commandPowerNonFilter = ApplyLimitsPostFilter(commandPowerNonFilter);
 
                 if (rateLimitTicket.IsAcquired)
                 {
                     if (Math.Abs(deltaToTarget) > InstantCorrectionThreshold)
                     {
-                        _batteryController.SetBatteryPower(currentBatteryLoad + deltaToTarget, true);
-                        _entityManager.SetStateAsync("sensor.netdaemon_batterycommand", $"{currentBatteryLoad + deltaToTarget}");
+                        _batteryController.SetBatteryPower(commandPowerNonFilter, true);
+                        _entityManager.SetStateAsync("sensor.battery_control_batterycommand", $"{commandPowerNonFilter}");
                     }
                     else
                     {
                         _batteryController.SetBatteryPower(commandPower);
-                        _entityManager.SetStateAsync("sensor.netdaemon_batterycommand", $"{commandPower}");
+                        _entityManager.SetStateAsync("sensor.battery_control_batterycommand", $"{commandPower}");
                     }
 
                     
