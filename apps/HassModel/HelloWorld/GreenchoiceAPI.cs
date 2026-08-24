@@ -77,6 +77,8 @@ namespace HomeAssistantNetDaemon.apps.HassModel.HelloWorld
             var returnUrl = HtmlGetInputValue(content, "ReturnUrl");
             var RequestVeriToken = HtmlGetInputValue(content, "__RequestVerificationToken");
 
+            returnUrl = returnUrl.Replace("&amp;", "&");
+
             if (string.IsNullOrEmpty(returnUrl))
             {
                 Console.WriteLine("Failed to get return URL from content");
@@ -110,7 +112,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.HelloWorld
 
             while (loginResult.StatusCode == HttpStatusCode.Found)
             {
-                Thread.Sleep(1000);
+                Thread.Sleep(2000);
                 var newTarget = new Uri("https://sso.greenchoice.nl/" + loginResult.Headers.Location.OriginalString.Replace("&amp;", "&"));
                 loginResult = await _client.GetAsync(newTarget);
             }
@@ -178,14 +180,43 @@ namespace HomeAssistantNetDaemon.apps.HassModel.HelloWorld
             public List<GreenchoiceConsumptionEntry> entries { get; set; }
         }
 
+        private static bool LoginInProgress = false;
+        
         private async Task<string> JsonGet(Uri fetchUrl)
         {
             var dat = await _client.GetAsync(fetchUrl);
 
             if (dat.StatusCode != HttpStatusCode.OK)
             {
+                bool alreadyLoggingIn = false;
+                lock (this)
+                {
+                    alreadyLoggingIn = LoginInProgress;
+                }
+
+                if (alreadyLoggingIn)
+                {
+                    while (alreadyLoggingIn)
+                    {
+                        lock (this)
+                        {
+                            alreadyLoggingIn = LoginInProgress;
+                        }
+                        Thread.Sleep(500);
+                    }
+                    dat = await _client.GetAsync(fetchUrl);
+
+                    if (dat.StatusCode == HttpStatusCode.OK) // The other login that was in progress, has let us fetch it now
+                        return await dat.Content.ReadAsStringAsync();
+                }
+
+                LoginInProgress = true;
+
                 // Login and retry
                 await LogIn();
+
+                LoginInProgress = false;
+
                 dat = await _client.GetAsync(fetchUrl);
             
                 if (dat.StatusCode != HttpStatusCode.OK)
@@ -219,7 +250,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.HelloWorld
             public CustomerData subject { get; set; }
         }
 
-        public struct MeterReadings
+        public class MeterReadings
         {
             public struct ProductType
             {
@@ -252,9 +283,21 @@ namespace HomeAssistantNetDaemon.apps.HassModel.HelloWorld
 
             public List<ProductType> productTypes { get; set; }
 
+            public MeterReadings? lastYear { get; set; } = null;
+
             public ProductType.MonthData.Reading GetReading(DateTime date, ProductType.ProductTypeEnum type)
             {
                 var strT = type.ToString();
+
+                if (date.Year < productTypes.First().months.Last().readings.First().readingDate.Year) // Did we request data from previous year?
+                {
+                    Debug.Assert(lastYear != null);
+
+                    return lastYear.productTypes.FirstOrDefault(x => x.productType == strT).months
+                    .FirstOrDefault(x => x.month == date.Month).readings
+                    .FirstOrDefault(x => x.readingDate.Date == date.Date);
+                }
+
                 return productTypes.FirstOrDefault(x => x.productType == strT).months
                     .FirstOrDefault(x => x.month == date.Month).readings
                     .FirstOrDefault(x => x.readingDate.Date == date.Date);

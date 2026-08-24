@@ -23,7 +23,6 @@ namespace HassModel;
 ///     Hello world showcase using the new HassModel API
 /// </summary>
 [NetDaemonApp]
-[Focus]
 public class GreenchoiceMeterReader
 {
     private readonly IHaContext _ha;
@@ -167,20 +166,35 @@ public class GreenchoiceMeterReader
 
     private async void Test()
     {
-        var meterReadings = await _gc.FetchMeterReadings(DateTimeOffset.Now.Date.AddDays(-2));
+        // Meter readings are per year, on early january we'll need last years readings to fetch the previous days data
+        MeterReadings meterReadings = await _gc.FetchMeterReadings(DateTimeOffset.Now.Date);
+        //if (DateTimeOffset.Now.Date.Day <= 2 && DateTimeOffset.Now.Date.Month == 1)
+        {
+            meterReadings.lastYear = await _gc.FetchMeterReadings(DateTimeOffset.Now.Date.AddYears(-1));
+        }
 
-        // Seed code
-        //for (int i = -34; i < -1; i++)
-        //{
-        //    await FetchDay(meterReadings, DateTimeOffset.Now.Date.AddDays(i));
-        //    await Task.Delay(5000);
-        //}
-
-        await FetchDay(meterReadings, DateTimeOffset.Now.Date.AddDays(-2));
+        //await DoSeed(meterReadings, new DateTime(2024, 10, 4));  // Fetch from specific date till two days ago
+        //await DoSeed(meterReadings, DateTime.Now.AddDays(-64));  // Fetch last N days (up to, two days ago)
+        await FetchDay(meterReadings, DateTimeOffset.Now.Date.AddDays(-2)); // Fetch two days ago
     }
+
+    private async Task DoSeed(MeterReadings meterReadings, DateTime startDate)
+    {
+        // Seed code
+        var ts = DateTime.Now - new DateTime(2024, 10, 4); // Fetch from specific date till two days ago
+        //var ts = DateTime.Now - DateTime.Now.AddDays(-64); // Fetch last N days
+        for (int i = -ts.Days; i < -1; i++)
+        {
+            await FetchDay(meterReadings, DateTimeOffset.Now.Date.AddDays(i));
+            await Task.Delay(1000);
+        }
+    }
+
+
 
     private async Task FetchDay(MeterReadings meterReadings, DateTime fetchDate)
     {
+        Console.WriteLine($"Greenchoice fetch {fetchDate}");
         //#TODO Add a file that stores all successfully fetched days, so when we run it again it doesn't overwrite days that are already present.
         // If previous day is already present, we can also use it as last totals. Makes it easier to fill in gaps. We can also find gaps afterwards
         var lastTotalCounters = GetLastTotalCounters(meterReadings, fetchDate.Date);
@@ -417,7 +431,7 @@ public class GreenchoiceMeterReader
 
         await _entityManager.CreateAsync("sensor.greenchoice_electricity_cost_high", new EntityCreationOptions { Name = "Electricity Cost High", DeviceClass = "monetary", }, new
         {
-            unit_of_measurement = "ï¿½",
+            unit_of_measurement = "€",
             icon = "mdi:currency-eur",
             state_class = "total",
             value_template = "{{ value_json.electricity_cost_high }}", // and value from state
@@ -426,7 +440,7 @@ public class GreenchoiceMeterReader
         });
         await _entityManager.CreateAsync("sensor.greenchoice_electricity_cost_low", new EntityCreationOptions { Name = "Electricity Cost Low", DeviceClass = "monetary", }, new
         {
-            unit_of_measurement = "ï¿½",
+            unit_of_measurement = "€",
             icon = "mdi:currency-eur",
             state_class = "total",
             value_template = "{{ value_json.electricity_cost_low }}", // and value from state
@@ -435,7 +449,7 @@ public class GreenchoiceMeterReader
         });
         await _entityManager.CreateAsync("sensor.greenchoice_electricity_cost_total", new EntityCreationOptions { Name = "Electricity Cost Total", DeviceClass = "monetary", }, new
         {
-            unit_of_measurement = "ï¿½",
+            unit_of_measurement = "€",
             icon = "mdi:currency-eur",
             state_class = "total",
             value_template = "{{ value_json.electricity_cost_total }}", // and value from state
@@ -446,7 +460,7 @@ public class GreenchoiceMeterReader
 
         await _entityManager.CreateAsync("sensor.greenchoice_gas_cost_total", new EntityCreationOptions { Name = "Gas Cost Total", DeviceClass = "monetary", }, new
         {
-            unit_of_measurement = "ï¿½",
+            unit_of_measurement = "€",
             icon = "mdi:currency-eur",
             state_class = "total",
             value_template = "{{ value_json.gas_cost_total }}", // and value from state
