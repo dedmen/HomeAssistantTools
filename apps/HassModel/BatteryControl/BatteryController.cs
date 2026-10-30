@@ -380,7 +380,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
             }
 
             // Sometimes the batteries just don't obey what they are told, despite the request succeeding, if their power is off from their supposed state, after giving it time to reach it, just issue command to supposed state again
-            foreach (var item in _batteries.Where(x => Math.Abs(x.LastKnownState - x.CurrentReportedPower) > 50 && (DateTimeOffset.Now - x.LastKnownStateTime) < TimeSpan.FromSeconds(10)))
+            foreach (var item in _batteries.Where(x => Math.Abs(x.LastKnownState - x.CurrentReportedPower) > 50 && (DateTimeOffset.Now - x.LastKnownStateTime) > TimeSpan.FromSeconds(10)))
             {
                 Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} Battery state missmatch {item.NetworkAddress}: LastCmd:{item.LastKnownState} != CurState:{item.CurrentReportedPower}");
                 // This one's state that we told it to do, and its actual power is off, tell it again to go where we told it
@@ -711,11 +711,20 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
 
                     if (lease.IsAcquired) // We may have been dropped, because another force send won
                     {
-                        if (target.LastKnownState == powerWatts) // While we were waiting, it already got to where we wanted it?
-                            return;
+                        // While we were waiting, it already got to where we wanted it?
+                        // We want to not repeatedly send the same state (or very close), but also the battery doesn't always obey when its only sent once, so we send the same state up to 3 times before we stop
+                        if (Math.Abs(target.LastKnownState - powerWatts) < 10 && target.LastKnownStateConfirmCounter > 2 && !forceSend)
+                            return; // No change
 
                         Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} Forced power command {target.NetworkAddress} from {target.LastKnownState} to {powerWatts}");
                         SendPowerCommandInternal(target, powerWatts, targetMode, postContent);
+                    }
+                    else
+                    {
+                        if (forceSend)
+                        {
+                            Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} Lease failed for Forced power command {target.NetworkAddress} from {target.LastKnownState} to {powerWatts}");
+                        }
                     }
                 }
                 else // Try to send if rate limiter allows, if not then just drop it
