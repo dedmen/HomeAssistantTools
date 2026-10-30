@@ -41,6 +41,8 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
 
         public int ConsequtiveRequestFailCount = 0;
 
+        public bool IsOffline = false; // Cannot be used because it was manually shut off and is not reachable
+
 
         //#TODO IsFullyCharged. If we commanded it to charge at >50w for 30 seconds, and its input power is <10w, it is full.
         // Maybe by curl -g -X POST -H "Content-Type: application/json" "http://10.0.2.76:8080/rpc/Indevolt.GetData?config={\"t\":[6001]}"
@@ -257,15 +259,16 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
             //}
 
             int socState = 0;
-            if (!int.TryParse(_ha.GetState("sensor.living_room_indevolt_bk1600_sec_battery_soc").State, out socState)) // state may be "unavailable"
+            if (!int.TryParse(_ha.GetState("sensor.living_room_bk1600_sec2_battery_soc").State, out socState)) // state may be "unavailable"
                 socState = 0;
-
+            
             // BK1600
             _batteries.Add(new BatteryInfo()
             {
-                SerialNumber = _ha.GetEntityRegistration("sensor.living_room_indevolt_bk1600_sec_battery_soc").Device.SerialNumber,
+                SerialNumber = _ha.GetEntityRegistration("sensor.living_room_bk1600_sec2_battery_soc").Device.SerialNumber,
                 StateOfCharge = socState,
-                NetworkAddress = "http://10.0.3.105:8080" // d4:27:87:5a:d4:48
+                NetworkAddress = "http://10.0.3.111:8080", // D4:27:87:5A:CC:82
+                IsOffline = socState == 0
             });
 
             if (!int.TryParse(_ha.GetState("sensor.schlafzimmer_indevolt_bk1600_a673ba40t800780s_battery_soc").State, out socState))
@@ -276,13 +279,14 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
             {
                 SerialNumber = _ha.GetEntityRegistration("sensor.schlafzimmer_indevolt_bk1600_a673ba40t800780s_battery_soc").Device.SerialNumber,
                 StateOfCharge = socState,
-                NetworkAddress = "http://10.0.3.106:8080" // d4:27:87:91:6b:9c
+                NetworkAddress = "http://10.0.3.106:8080", // d4:27:87:91:6b:9c
+                IsOffline = socState == 0
             });
 
             // Monitor SoC changes
             _ha.StateChanges().Where(e =>
                 e.Entity.EntityId == "sensor.schlafzimmer_indevolt_bk1600_a673ba40t800780s_battery_soc" ||
-                e.Entity.EntityId == "sensor.living_room_indevolt_bk1600_sec_battery_soc"
+                e.Entity.EntityId == "sensor.living_room_bk1600_sec2_battery_soc"
             ).Subscribe(e =>
             {
                 var serial = e.Entity.Registration.Device.SerialNumber;
@@ -291,7 +295,13 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
 
                 int socState = 0;
                 if (int.TryParse(e.New.State, out socState)) // state may be "unavailable"
+                {
                     found.StateOfCharge = socState;
+                    if (found.IsOffline)
+                        Console.WriteLine($"Battery {found.NetworkAddress} is now online.");
+                    found.IsOffline = false;
+                    
+                }
 
 #if DEBUG
                 Console.WriteLine($"New SoC {socState} for {serial}");
@@ -334,7 +344,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
             // On interval, check if a battery has been inactive for so long, that we can send it to standby
             foreach (var item in _batteries)
             {
-                if ((DateTimeOffset.Now - item.LastActive) > TimeSpan.FromMinutes(5))
+                if ((DateTimeOffset.Now - item.LastActive) > TimeSpan.FromMinutes(5) && Math.Abs(item.CurrentReportedPower) < 30)
                     SendStandbyCommand(item);
             }
 
@@ -366,6 +376,9 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
             {
                 if (item.ConsequtiveRequestFailCount > 5)
                 {
+                    if (!item.IsOffline)
+                        Console.WriteLine($"Battery {item.NetworkAddress} is now offline.");
+                    item.IsOffline = true;
                     item.ConsequtiveRequestFailCount = 0;
 
                     DetermineNewIPAddress(item).ContinueWith(x =>
@@ -380,7 +393,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
             }
 
             // Sometimes the batteries just don't obey what they are told, despite the request succeeding, if their power is off from their supposed state, after giving it time to reach it, just issue command to supposed state again
-            foreach (var item in _batteries.Where(x => Math.Abs(x.LastKnownState - x.CurrentReportedPower) > 50 && (DateTimeOffset.Now - x.LastKnownStateTime) > TimeSpan.FromSeconds(10)))
+            foreach (var item in _batteries.Where(x => !x.IsOffline).Where(x => Math.Abs(x.LastKnownState - x.CurrentReportedPower) > 50 && (DateTimeOffset.Now - x.LastKnownStateTime) > TimeSpan.FromSeconds(10)))
             {
                 Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} Battery state missmatch {item.NetworkAddress}: LastCmd:{item.LastKnownState} != CurState:{item.CurrentReportedPower}");
                 // This one's state that we told it to do, and its actual power is off, tell it again to go where we told it
@@ -467,7 +480,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
         List<(BatteryInfo, float)> DistributePower(int powerWatts)
         {
             var batteries = new List<BatteryInfo>();
-            batteries.AddRange(_batteries);
+            batteries.AddRange(_batteries.Where(x => !x.IsOffline));
 
             List<(BatteryInfo, float)> result = new();
 
@@ -628,7 +641,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
             }
 
             // Set the remaining batteries, to zero
-            foreach (var item in _batteries.Where(x => !result.Any(y => y.Item1 == x)))
+            foreach (var item in _batteries.Where(x => !x.IsOffline).Where(x => result.All(y => y.Item1 != x)))
             {
                 result.Add((item, 0));
             }
@@ -690,6 +703,11 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
             //BatteryMode targetMode = powerWatts == 0 ? BatteryMode.Standby : (powerWatts > 0 ? BatteryMode.Charging : BatteryMode.Discharging); // 0=standby, 1=charging, 2=discharging
             BatteryMode targetMode = powerWatts == 0 ? BatteryMode.Discharging : (powerWatts > 0 ? BatteryMode.Charging : BatteryMode.Discharging); // 0=standby, 1=charging, 2=discharging
 
+            // Keep standby, even when we re-apply due to force
+            if (target.IsStandby && powerWatts == 0)
+            {
+                targetMode = BatteryMode.Standby;
+            }
 
             var postContent = new
             {
