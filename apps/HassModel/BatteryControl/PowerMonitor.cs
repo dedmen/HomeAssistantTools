@@ -42,6 +42,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
 
         private float MaximumChargePower = 1200;
         private float MaximumDischargePower = 2400;
+        private float DischargeDeadzone = 50;
 
         private bool UseFilter = false;
         private bool UseFalseReadingDetection = false;
@@ -307,6 +308,46 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
                         if (float.TryParse(_ha.GetState("number.battery_control_maximum_discharge_power")?.State ?? "2400", out float parsedValue))
                         {
                             MaximumDischargePower = parsedValue;
+                        }
+                    }
+                }
+
+                // Discharge Deadzone
+                {
+                    await _entityManager.CreateAsync("number.battery_control_discharge_deadzone", new EntityCreationOptions(Name: "Discharge Deadband", Persist: true), new
+                    {
+                        min = 50,
+                        max = 500,
+                        step = 1.0,
+                        mode = "box", // Can be "box" or "slider"
+                        unit_of_measurement = "W",
+                        icon = "mdi:power-sleep",
+
+                        state_topic = "homeassistant/number/battery_control_discharge_deadzone/state",
+                        device = new { identifiers = new[] { "battery_control" }, name = "Battery Control", model = "SuperDuper Mk2", manufacturer = "Dedmen", sw_version = 1.00 }
+                    }).ConfigureAwait(false);
+
+                    {
+                        var commandSubscription = await _entityManager.PrepareCommandSubscriptionAsync("number.battery_control_discharge_deadzone").ConfigureAwait(false);
+
+                        commandSubscription.Subscribe(async commandReceived =>
+                        {
+                            // Try parsing the incoming string into a valid double
+                            if (float.TryParse(commandReceived, out float parsedValue))
+                            {
+                                await _entityManager.SetStateAsync("number.battery_control_discharge_deadzone", commandReceived).ConfigureAwait(false);
+                                DischargeDeadzone = parsedValue;
+
+                                lock (_rateLimiter)
+                                {
+                                    OnUpdate();
+                                }
+                            }
+                        });
+
+                        if (float.TryParse(_ha.GetState("number.battery_control_discharge_deadzone")?.State ?? "2400", out float parsedValue))
+                        {
+                            DischargeDeadzone = parsedValue;
                         }
                     }
                 }
@@ -580,6 +621,9 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
             if (input < 0 && input > -50)
                 input = -50; // We wanted to discharge, lets bump it up to the minimum required discharge power, we waste some grid export, but thats better than importing
 
+            if (input < 0 && input > -DischargeDeadzone)
+                input = 0; // We are in deadzone, lets not do that
+
             input = MinimumBatteryPower switch
             {
                 < 0 => Math.Min(input, MinimumBatteryPower), // Forced discharge
@@ -658,7 +702,10 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
 
                 if (rateLimitTicket.IsAcquired)
                 {
-                    if (Math.Abs(deltaToTarget) > InstantCorrectionThreshold)
+                    // We would always force every update, if we cannot reach the target, because our filters limit the max load. So only force if there is actually battery movement to be done
+                    var deltaFromCurrentBatteryLoad = Math.Abs(commandPower - currentBatteryLoad);
+
+                    if (Math.Abs(deltaToTarget) > InstantCorrectionThreshold && deltaFromCurrentBatteryLoad > 50)
                     {
                         _batteryController.SetBatteryPower(commandPowerNonFilter, true);
                         _entityManager.SetStateAsync("sensor.battery_control_batterycommand", $"{commandPowerNonFilter}");
