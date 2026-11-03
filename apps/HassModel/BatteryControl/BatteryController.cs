@@ -81,6 +81,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
 
         // Only charge using a single battery, not distributing charge power between both
         private bool SingleBatteryChargeMode = false;
+        private float MinDischargePowerForSplit = 400;
         private int MinimumSoC = 10;
 
         private int MaximumChargeSoCDelta = 5;
@@ -239,6 +240,39 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
                         }
                     }
                 }
+
+                // How much discharge is needed, before we split the power across multiple batteries
+                {
+                    await _entityManager.CreateAsync("number.battery_control_min_discharge_for_split", new EntityCreationOptions { Name = "Min Discharge to Split power", Persist = true }, new
+                    {
+                        min = 300,
+                        max = 1200,
+                        mode = "box",
+                        unit_of_measurement = "W",
+                        icon = "mdi:call-split",
+
+                        state_topic = "homeassistant/number/battery_control_min_discharge_for_split/state",
+                        device = new { identifiers = new[] { "battery_control" }, name = "Battery Control", model = "SuperDuper Mk2", manufacturer = "Dedmen", sw_version = 1.00 }
+                    }).ConfigureAwait(false);
+
+                    var commandSubscription = await _entityManager.PrepareCommandSubscriptionAsync("number.battery_control_min_discharge_for_split").ConfigureAwait(false);
+
+                    commandSubscription.Subscribe(async commandReceived =>
+                    {
+                        // Try parsing the incoming string into a valid double
+                        if (int.TryParse(commandReceived, out var parsedValue))
+                        {
+                            await _entityManager.SetStateAsync("number.battery_control_min_discharge_for_split", commandReceived).ConfigureAwait(false);
+                            MinDischargePowerForSplit = parsedValue;
+                        }
+                    });
+
+                    if (int.TryParse(_ha.GetState("number.battery_control_min_discharge_for_split")?.State ?? "400", out var parsedValue))
+                    {
+                        MinDischargePowerForSplit = parsedValue;
+                    }
+                }
+
 
             }
 
@@ -477,6 +511,33 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
             Discharging = 2
         }
 
+
+        // Decide which battery should get charge power, already charging one, otherwise the lowest SoC
+        private BatteryInfo GetActiveBatteryOrLowestSoC(IEnumerable<BatteryInfo> batteries)
+        {
+            // The one that is already charging
+            var batteryToUse = batteries.FirstOrDefault(x => x.LastKnownState > 50);
+
+            // Otherweise give all to lowest
+            if (batteryToUse == null)
+                batteryToUse = batteries.MinBy(x => x.StateOfCharge)!;
+
+            return batteryToUse;
+        }
+
+        // Decide which battery should get discharge power, already discharging one, otherwise the highest SoC
+        private BatteryInfo GetActiveBatteryOrHighestSoC(IEnumerable<BatteryInfo> batteries)
+        {
+            // The one that is already discharging
+            var batteryToUse = batteries.FirstOrDefault(x => x.LastKnownState < -50);
+
+            // Otherweise give all to lowest
+            if (batteryToUse == null)
+                batteryToUse = batteries.MaxBy(x => x.StateOfCharge)!;
+
+            return batteryToUse;
+        }
+
         List<(BatteryInfo, float)> DistributePower(int powerWatts)
         {
             var batteries = new List<BatteryInfo>();
@@ -556,15 +617,8 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
                     }
 
                     {
-                        // Used to give the power to the lowest battery, but this caused two batteries to constantly switch places, with every percent change of SoC, because the other one would become lower
-                        // Instead of choosing the lowest, prefer a battery that is already charging. That way the 5% SoC delta code above, will take care of switching between the batteries, and it won't flip around that often.
-
-                        // The one that is already charging
-                        var batteryToUse = batteries.FirstOrDefault(x => x.LastKnownState > 50);
-
-                        // Otherweise give all to lowest
-                        if (batteryToUse == null)
-                            batteryToUse = batteries.MinBy(x => x.StateOfCharge)!;
+                        // Prefer already charging one, otherwise just grab the one that has lowest SoC
+                        var batteryToUse = GetActiveBatteryOrLowestSoC(batteries);
 
                         //Console.WriteLine($"BAT charge all to lowest {powerWatts}");
 
@@ -595,17 +649,19 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
                         multiBatteryMode = true; // Already both batteries active, we can stay on both active.
                         // Unless load has gone so low that we really don't need anymore
 
-                        if (powerWatts > -200) // Less than 200 required, just one battery is enough
+                        if (powerWatts > -(MinDischargePowerForSplit*0.75)) // Less than split point with some margin (To not flip back and forth), just one battery is enough
                             multiBatteryMode = false;
                     }
                     else
                     {
                         // Not yet two batteries active, we activate them if there is enough work for them
-                        var threshold = -400;
+                        var threshold = -MinDischargePowerForSplit;
 
-                        // If the inactive battery is in standby, avoid waking it up
+                        // If the inactive battery is in standby, avoid waking it up by upping the threshold a bit more. only activate it when we really exceeded it properly
                         if (batteries.Where(x => x.LastKnownState == 0).Count(x => x.IsStandby) > 0)
-                            threshold = -600;
+                            threshold *= 1.2f;
+
+                        threshold = Math.Clamp(threshold, -1200, -200); // A single battery cannot provide more than 1200, even if the calculated threshold would be higher, this is hard limit. Also two batteries provide minimum 200w, so going under that also doesn't make sense
 
                         if (powerWatts < threshold)
                             multiBatteryMode = true;
@@ -628,7 +684,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
 
                     {
                         // Small load, just take first usable battery 
-                        var batteryToUse = batteries.First();
+                        var batteryToUse = GetActiveBatteryOrHighestSoC(batteries);
 
                         //Console.WriteLine($"BAT discharge first {powerWatts}");
 
