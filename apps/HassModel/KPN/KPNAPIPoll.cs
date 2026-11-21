@@ -1,4 +1,4 @@
-﻿using HomeAssistantNetDaemon.apps.HassModel.HelloWorld;
+using HomeAssistantNetDaemon.apps.HassModel.HelloWorld;
 using KPNAPIPoll;
 using Microsoft.Extensions.Configuration;
 using NetDaemon.Extensions.MqttEntityManager;
@@ -104,6 +104,12 @@ namespace HomeAssistantNetDaemon.apps.HassModel.KPN
             {
                 // Happens after midnight for a short while, no NL data subscriptíon present
                 Thread.Sleep(TimeSpan.FromMinutes(1));
+                return;
+            }
+            catch (System.NullReferenceException ex)
+            {
+                // uh?
+                Console.WriteLine(ex.Message);
                 return;
             }
 

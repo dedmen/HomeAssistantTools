@@ -378,6 +378,9 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
             // On interval, check if a battery has been inactive for so long, that we can send it to standby
             foreach (var item in _batteries)
             {
+                if (item.IsOffline)
+                    continue; // Don't bother with a battery we can't reach
+
                 if ((DateTimeOffset.Now - item.LastActive) > TimeSpan.FromMinutes(5) && Math.Abs(item.CurrentReportedPower) < 30)
                     SendStandbyCommand(item);
             }
@@ -748,6 +751,9 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
         {
             // curl -g -X POST -H "Content-Type: application/json" "http://192.168.31.213:8080/rpc/Indevolt.SetData?config={\"f\":16,\"t\":47015,\"v\":[2,700,5]}"
 
+            if (target.IsOffline)
+                return; // Don't bother sending to a battery we can't reach, it will just fail and bump the fail counter
+
             if (Math.Abs(powerWatts) < 50)
                 powerWatts = 0;
 
@@ -868,6 +874,9 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
 
         void SendStandbyCommand(BatteryInfo target)
         {
+            if (target.IsOffline)
+                return; // Don't bother sending to a battery we can't reach
+
             if (target.IsStandby)
                 return;
 
