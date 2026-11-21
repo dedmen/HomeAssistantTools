@@ -1,4 +1,4 @@
-﻿using NetDaemon.Extensions.MqttEntityManager;
+using NetDaemon.Extensions.MqttEntityManager;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
@@ -757,6 +757,10 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
             if (Math.Abs(powerWatts) < 50)
                 powerWatts = 0;
 
+            // Forced command: skip when the battery is already within 50 W of the target
+            if (forceSend && Math.Abs(target.CurrentReportedPower - powerWatts) < 50)
+                return; // Already at the target
+
             // We want to not repeatedly send the same state (or very close), but also the battery doesn't always obey when its only sent once, so we send the same state up to 3 times before we stop
             if (Math.Abs(target.LastKnownState - powerWatts) < 10 && target.LastKnownStateConfirmCounter > 2 && !forceSend)
                 return; // No change
@@ -795,6 +799,9 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
                         // We want to not repeatedly send the same state (or very close), but also the battery doesn't always obey when its only sent once, so we send the same state up to 3 times before we stop
                         if (Math.Abs(target.LastKnownState - powerWatts) < 10 && target.LastKnownStateConfirmCounter > 2 && !forceSend)
                             return; // No change
+
+                        if (forceSend && Math.Abs(target.CurrentReportedPower - powerWatts) < 50)
+                            return; // Arrived at the target while waiting for the lease
 
                         Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} Forced power command {target.NetworkAddress} from {target.LastKnownState} to {powerWatts}");
                         SendPowerCommandInternal(target, powerWatts, targetMode, postContent);
