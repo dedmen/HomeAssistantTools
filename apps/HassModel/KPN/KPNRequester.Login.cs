@@ -176,7 +176,7 @@ namespace KPNAPIPoll
                 using (StreamReader sr = new StreamReader(response.GetResponseStream()))
                 {
                     var result = sr.ReadToEnd();//Read logged in webpage
-                    Console.WriteLine(result);
+                    _log.Info(result);
 
                     if (result.Contains("2fa_required"))
                     {
@@ -330,7 +330,7 @@ namespace KPNAPIPoll
                         using (StreamReader sr = new StreamReader(getResponse.GetResponseStream()))
                         {
                             var result = sr.ReadToEnd();//Read logged in webpage
-                            Console.WriteLine(result);
+                            _log.Info(result);
 
                             var res = JsonSerializer.Deserialize<DynResLoginToken>(result);
 
@@ -429,7 +429,7 @@ namespace KPNAPIPoll
                     using (StreamReader sr = new StreamReader(getResponse.GetResponseStream()))
                     {
                         var result = sr.ReadToEnd();//Read logged in webpage
-                        Console.WriteLine(result);
+                        _log.Info(result);
 
                         var res = JsonSerializer.Deserialize<DynResNewAppToken>(result);
 
@@ -464,7 +464,7 @@ namespace KPNAPIPoll
                 using (StreamReader sr = new StreamReader(exception.Response.GetResponseStream()))
                 {
                     var result = sr.ReadToEnd();//Read logged in webpage
-                    Console.WriteLine(result);
+                    _log.Error(result);
                 }
 
                 // login again and retry

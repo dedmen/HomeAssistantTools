@@ -26,6 +26,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
         private readonly IHaContext _ha;
         private readonly IConfiguration _cfg;
         private readonly IMqttEntityManager _entityManager;
+        private readonly PrefixedLog _log;
 
         private BatteryController _batteryController;
 
@@ -101,14 +102,15 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
         ];
 
 
-        public PowerMonitor(IHaContext ha, IConfiguration cfg, IMqttEntityManager entityManager)
+        public PowerMonitor(IHaContext ha, IConfiguration cfg, IMqttEntityManager entityManager, ILogger<PowerMonitor> logger)
         {
             _ha = ha;
             _cfg = cfg;
             _entityManager = entityManager;
+            _log = new PrefixedLog("[Battery]", logger);
 
-            _shellyEmulator = new ShellyEmulator();
-            _batteryController = new BatteryController(ha, entityManager);
+            _shellyEmulator = new ShellyEmulator(_log);
+            _batteryController = new BatteryController(ha, entityManager, _log);
         }
 
 
@@ -515,7 +517,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
                         {
 
                             if (LogFalseReadingDetection)
-                                Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} Meter sign missmatch. ExpDelta {totalDeltaSinceLastMeter}, MeterDelta {newStateMeterDelta}, " +
+                                _log.Warning($"Meter sign missmatch. ExpDelta {totalDeltaSinceLastMeter}, MeterDelta {newStateMeterDelta}, " +
                                         $"Expected {updatedEntity.PowerAtLastMeter}->{updatedEntity.PowerAtLastMeter + totalDeltaSinceLastMeter}. " +
                                         $"Observed {updatedEntity.PowerAtLastMeter}->{newPowerState}");
 
@@ -525,7 +527,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
                                 // The meter didn't do what expected, and if the expected one had applied, we would've crossed zero. This is the failure mode
 
                                 if (LogFalseReadingDetection)
-                                    Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} Meter false reading detected. ExpDelta {totalDeltaSinceLastMeter}, MeterDelta {newStateMeterDelta}, " +
+                                    _log.Warning($"Meter false reading detected. ExpDelta {totalDeltaSinceLastMeter}, MeterDelta {newStateMeterDelta}, " +
                                         $"Expected {updatedEntity.PowerAtLastMeter}->{updatedEntity.PowerAtLastMeter + totalDeltaSinceLastMeter}. " +
                                         $"Observed {updatedEntity.PowerAtLastMeter}->{newPowerState}");
 
@@ -564,7 +566,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
                     // A greater than 100w jump, into more grid export
                     if (updatedEntity.PowerAtLastMeter < 0 && newStateMeterDelta < -100)
                     {
-                        Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} Sudden grid meter spike from {updatedEntity.PowerAtLastMeter} to {newPowerState}, ignoring spike");
+                        _log.Warning($"Sudden grid meter spike from {updatedEntity.PowerAtLastMeter} to {newPowerState}, ignoring spike");
                         // We need to update the PowerAtLastMeter though, so that if the next reading still reports same, we don't fall into here again
                         updatedEntity.PowerAtLastMeter = newPowerState;
 
@@ -673,15 +675,15 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
 
             // Give the batteries a new target, such that we get to our meterTarget
 #if DEBUG
-            Console.WriteLine($"{DateTimeOffset.Now: HH:mm:ss.fff} currentMeter {currentMeter} ({lastMeter} + {totalDeltaSinceLastMeter})");
-            Console.WriteLine($"{DateTimeOffset.Now: HH:mm:ss.fff} deltaToTarget {deltaToTarget}");
+            _log.Info($"currentMeter {currentMeter} ({lastMeter} + {totalDeltaSinceLastMeter})");
+            _log.Info($"deltaToTarget {deltaToTarget}");
 #endif
 
             {
                 using var rateLimitTicket = _rateLimiterApply.AttemptAcquire((int)Math.Abs(deltaToTarget));
 
 #if DEBUG
-                Console.WriteLine($"{DateTimeOffset.Now: HH:mm:ss.fff} Battery to {currentBatteryLoad + deltaToTarget} ({currentBatteryLoad} + {deltaToTarget}), Rate Limit {rateLimitTicket.IsAcquired}");
+                _log.Info($"Battery to {currentBatteryLoad + deltaToTarget} ({currentBatteryLoad} + {deltaToTarget}), Rate Limit {rateLimitTicket.IsAcquired}");
 #endif
 
                 _entityManager.SetStateAsync("sensor.battery_control_targetpower", $"{currentBatteryLoad + deltaToTarget}");

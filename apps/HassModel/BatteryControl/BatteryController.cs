@@ -1,4 +1,4 @@
-using NetDaemon.Extensions.MqttEntityManager;
+﻿using NetDaemon.Extensions.MqttEntityManager;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
@@ -78,6 +78,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
 
         public IHaContext _ha { get; }
         public IMqttEntityManager _entityManager { get; }
+        private readonly PrefixedLog _log;
 
         // Only charge using a single battery, not distributing charge power between both
         private bool SingleBatteryChargeMode = false;
@@ -87,10 +88,11 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
         private int MaximumChargeSoCDelta = 5;
 
 
-        public BatteryController(IHaContext ha, IMqttEntityManager entityManager)
+        public BatteryController(IHaContext ha, IMqttEntityManager entityManager, PrefixedLog log)
         {
             _ha = ha;
             _entityManager = entityManager;
+            _log = log;
 
             _httpClient.Timeout = TimeSpan.FromSeconds(15);
 
@@ -332,13 +334,13 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
                 {
                     found.StateOfCharge = socState;
                     if (found.IsOffline)
-                        Console.WriteLine($"Battery {found.NetworkAddress} is now online.");
+                        _log.Info($"Battery {found.NetworkAddress} is now online.");
                     found.IsOffline = false;
                     
                 }
 
 #if DEBUG
-                Console.WriteLine($"New SoC {socState} for {serial}");
+                _log.Info($"New SoC {socState} for {serial}");
 #endif
             });
 
@@ -402,7 +404,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
                 {
                     // Commanded to charge, but not charging, probably full.
                     item.IsFullyCharged = true;
-                    Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} Device {item.NetworkAddress} is now fully charged");
+                    _log.Info($"Device {item.NetworkAddress} is now fully charged");
                     SendPowerCommand(item, 0); // Stop charge command, they're not taking it anyway
                 }
             }
@@ -414,7 +416,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
                 if (item.ConsequtiveRequestFailCount > 5)
                 {
                     if (!item.IsOffline)
-                        Console.WriteLine($"Battery {item.NetworkAddress} is now offline.");
+                        _log.Warning($"Battery {item.NetworkAddress} is now offline.");
                     item.IsOffline = true;
                     item.ConsequtiveRequestFailCount = 0;
 
@@ -432,7 +434,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
             // Sometimes the batteries just don't obey what they are told, despite the request succeeding, if their power is off from their supposed state, after giving it time to reach it, just issue command to supposed state again
             foreach (var item in _batteries.Where(x => !x.IsOffline).Where(x => Math.Abs(x.LastKnownState - x.CurrentReportedPower) > 50 && (DateTimeOffset.Now - x.LastKnownStateTime) > TimeSpan.FromSeconds(10)))
             {
-                Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} Battery state missmatch {item.NetworkAddress}: LastCmd:{item.LastKnownState} != CurState:{item.CurrentReportedPower}");
+                _log.Warning($"Battery state missmatch {item.NetworkAddress}: LastCmd:{item.LastKnownState} != CurState:{item.CurrentReportedPower}");
                 // This one's state that we told it to do, and its actual power is off, tell it again to go where we told it
                 SendPowerCommand(item, item.LastKnownState, true);
             }
@@ -460,17 +462,17 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
 
                         if (resp.StatusCode == HttpStatusCode.BadGateway) // HomeAssistant runs through proxy, and this means fail
                         {
-                            Console.WriteLine($"Determine Failed to send {x}: {resp.StatusCode}");
+                            _log.Error($"Determine Failed to send {x}: {resp.StatusCode}");
                             return null;
                         }
 
                         //await resp.Content.ReadAsStringAsync();
-                        Console.WriteLine($"Determine success {x}: {resp.StatusCode}");
+                        _log.Info($"Determine success {x}: {resp.StatusCode}");
                         return x;
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"Determine Failed to send {x}: {ex.Message}");
+                        _log.Error($"Determine Failed to send {x}: {ex.Message}");
                         return null;
                     }
                 });
@@ -483,26 +485,24 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
 
 
         //#TODO handle mDNS discovery, for when a battery reconnected to wifi and changed IP
-        static void onServiceChanged(object sender, ServiceAnnouncementEventArgs e)
+        void onServiceChanged(object sender, ServiceAnnouncementEventArgs e)
         {
             printService('~', e.Announcement);
         }
 
-        static void onServiceRemoved(object sender, ServiceAnnouncementEventArgs e)
+        void onServiceRemoved(object sender, ServiceAnnouncementEventArgs e)
         {
             printService('-', e.Announcement);
         }
 
-        static void onServiceAdded(object sender, ServiceAnnouncementEventArgs e)
+        void onServiceAdded(object sender, ServiceAnnouncementEventArgs e)
         {
             printService('+', e.Announcement);
         }
-        static void printService(char startChar, ServiceAnnouncement service)
+        void printService(char startChar, ServiceAnnouncement service)
         {
-            Console.WriteLine("{0} '{1}' on {2}", startChar, service.Instance, service.NetworkInterface.Name);
-            Console.WriteLine("\tHost: {0} ({1})", service.Hostname, string.Join(", ", service.Addresses));
-            Console.WriteLine("\tPort: {0}", service.Port);
-            Console.WriteLine("\tTxt : [{0}]", string.Join(", ", service.Txt));
+            _log.Info($"'{service.Instance}' on {service.NetworkInterface.Name} {startChar}");
+            _log.Info($"Host: {service.Hostname} ({string.Join(", ", service.Addresses)}), Port: {service.Port}, Txt: [{string.Join(", ", service.Txt)}]");
         }
 
 
@@ -720,7 +720,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
             {
                 // If we commanded discharge, we have to assume its no longer fully charged
                 target.IsFullyCharged = false;
-                Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} Device {target.NetworkAddress} is no longer fully charged");
+                _log.Info($"Device {target.NetworkAddress} is no longer fully charged");
             }
 
             if (target.LastKnownState == powerWatts) // Count how many times we sent the same command
@@ -803,14 +803,14 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
                         if (forceSend && Math.Abs(target.CurrentReportedPower - powerWatts) < 50)
                             return; // Arrived at the target while waiting for the lease
 
-                        Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} Forced power command {target.NetworkAddress} from {target.LastKnownState} to {powerWatts}");
+                        _log.Info($"Forced power command {target.NetworkAddress} from {target.LastKnownState} to {powerWatts}");
                         SendPowerCommandInternal(target, powerWatts, targetMode, postContent);
                     }
                     else
                     {
                         if (forceSend)
                         {
-                            Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} Lease failed for Forced power command {target.NetworkAddress} from {target.LastKnownState} to {powerWatts}");
+                            _log.Warning($"Lease failed for Forced power command {target.NetworkAddress} from {target.LastKnownState} to {powerWatts}");
                         }
                     }
                 }
@@ -825,7 +825,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
                     else
                     {
 #if DEBUG
-                        Console.WriteLine($"[DROPPED] Set {target.NetworkAddress} to {powerWatts}");
+                        _log.Warning($"[DROPPED] Set {target.NetworkAddress} to {powerWatts}");
 #endif
                     }
                 }
@@ -839,21 +839,21 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
             var request = new HttpRequestMessage(HttpMethod.Post, $"{target.NetworkAddress}/rpc/Indevolt.SetData?config={JsonSerializer.Serialize(postContent)}");
 
 #if DEBUG
-            Console.WriteLine($"Set {target.NetworkAddress} to {powerWatts}");
+            _log.Info($"Set {target.NetworkAddress} to {powerWatts}");
 #endif
             try
             {
 #if DEBUG
-                Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} Send... {target.NetworkAddress}");
+                _log.Info($"Send... {target.NetworkAddress}");
 #endif
                 var resp = await _httpClient.SendAsync(request);
                 //await resp.Content.ReadAsStringAsync();
 #if DEBUG
-                Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} Sent {target.NetworkAddress} {resp.StatusCode} {await resp.Content.ReadAsStringAsync()}");
+                _log.Info($"Sent {target.NetworkAddress} {resp.StatusCode} {await resp.Content.ReadAsStringAsync()}");
 #endif
                 if (resp.StatusCode == HttpStatusCode.BadGateway) // In HomeAssistant this runs through a proxy, that will not fail, but report a BadGateway
                 {
-                    Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} Failed to send {target.NetworkAddress}: {resp.StatusCode}");
+                    _log.Error($"Failed to send {target.NetworkAddress}: {resp.StatusCode}");
                     target.ConsequtiveRequestFailCount++;
                     return;
                 }
@@ -863,13 +863,13 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
                 //Console.WriteLine(respText);
                 if (!respText.Contains("true"))
                 {
-                    Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} {target.NetworkAddress} refused new setting. Tried from {target.LastKnownState} to {powerWatts}");
+                    _log.Error($"{target.NetworkAddress} refused new setting. Tried from {target.LastKnownState} to {powerWatts}");
                     return;
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss.fff} Failed to send {target.NetworkAddress}: {ex.Message}");
+                _log.Error($"Failed to send {target.NetworkAddress}: {ex.Message}");
                 target.ConsequtiveRequestFailCount++;
                 return;
             }
@@ -904,7 +904,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
                 using RateLimitLease lease = await target._rateLimiter.AcquireAsync(1);
 
 //#if DEBUG
-                Console.WriteLine($"{DateTimeOffset.Now: HH:mm:ss.fff} Set {target.NetworkAddress} to STANDBY");
+                _log.Info($"Set {target.NetworkAddress} to STANDBY");
 //#endif
 
                 SendPowerCommandInternal(target, 0, BatteryMode.Standby, postContent);

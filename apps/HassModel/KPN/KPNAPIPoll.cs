@@ -23,6 +23,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.KPN
         private readonly IHaContext _ha;
         private readonly IMqttEntityManager _entityManager;
         private readonly INetDaemonScheduler _scheduler;
+        private readonly PrefixedLog _log;
         private KPNRequester _kr;
         private KPNRequester.ProductEntry _productEntry;
 
@@ -31,8 +32,9 @@ namespace HomeAssistantNetDaemon.apps.HassModel.KPN
             _ha = ha;
             _entityManager = entityManager;
             _scheduler = scheduler;
-            _kr = new KPNRequester(cfg);
-            InitLogin();
+            _log = new PrefixedLog("[KPN]", logger);
+            _kr = new KPNRequester(cfg, zyxel, logger);
+            Task.Run(InitLoginAsync);
         }
 
         private void InitLogin()
@@ -45,7 +47,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.KPN
             }
             catch (System.Net.WebException ex) // Resource temporarily unavailable
             {
-                Console.WriteLine(ex.Message);
+                _log.Warning(ex.Message);
                 //Thread.Sleep(30000);
 
                 // try again
@@ -75,7 +77,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.KPN
             }
             catch (System.InvalidOperationException ex)
             {
-                Console.WriteLine(ex.Message);
+                _log.Warning(ex.Message);
                 //Thread.Sleep(30000);
 
                 if (ex is System.Net.WebException webEx)
@@ -109,7 +111,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.KPN
             catch (System.NullReferenceException ex)
             {
                 // uh?
-                Console.WriteLine(ex.Message);
+                _log.Error(ex.Message);
                 return;
             }
 
@@ -126,7 +128,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.KPN
 
             var remainingData = availableData - usedData;
 
-            Console.WriteLine($"[{DateTime.Now}] Avail {availableData} - Used {usedData} - Remaining GBs {remainingData}");
+            _log.Info($"Avail {availableData} - Used {usedData} - Remaining GBs {remainingData}");
 
             const float desiredSpareData = 20;
             const float dataPerOrder = 2; // 2gb per bundle order
@@ -134,21 +136,21 @@ namespace HomeAssistantNetDaemon.apps.HassModel.KPN
             if (remainingData < desiredSpareData)
             {
                 var toRequest = (int)Math.Ceiling((desiredSpareData - remainingData) / dataPerOrder);
-                Console.WriteLine($"Less than {desiredSpareData}gb available, requesting {toRequest} extensions");
+                _log.Info($"Less than {desiredSpareData}gb available, requesting {toRequest} extensions");
 
                 try
                 { 
                     for (int i = 0; i < toRequest; i++)
                     {
                         _productEntry.OrderSubscriptionProduct(_kr);
-                        Console.WriteLine($"Ordered {i + 1}/{toRequest}");
+                        _log.Info($"Ordered {i + 1}/{toRequest}");
                         if (toRequest > i+1) // Delay if we do multiple
                             Thread.Sleep(8000 + Random.Shared.Next(4000));
                     }
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine("Ordering threw exception, skipping all orders");
+                    _log.Error($"Ordering threw exception, skipping all orders: {ex.Message}");
                 }
             }
 

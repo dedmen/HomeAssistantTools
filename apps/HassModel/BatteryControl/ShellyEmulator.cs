@@ -191,9 +191,11 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
 
         private string _serialNumber;
 
+        private readonly PrefixedLog _log;
 
-        public ShellyEmulator()
+        public ShellyEmulator(PrefixedLog log)
         {
+            _log = log;
             _cancellationTokenSource = new CancellationTokenSource();
             _routes = new Dictionary<string, Func<HttpListenerContext, Task>>();
 
@@ -219,15 +221,15 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
             } 
             catch (System.Net.HttpListenerException ex)
             {
-                Console.WriteLine(ex.ToString());
+                _log.Error(ex.ToString());
                 return; // Emulator just won't run, if we cannot listen
             }
-          
+           
 
-            Console.WriteLine("HTTP Server started on:");
+            _log.Info("HTTP Server started on:");
             foreach (string prefix in _listener.Prefixes)
             {
-                Console.WriteLine($"  {prefix}");
+                _log.Info($"  {prefix}");
             }
 
             // Handle requests concurrently
@@ -302,7 +304,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"Error getting context: {ex.Message}");
+                    _log.Error($"Error getting context: {ex.Message}");
                 }
             }
         }
@@ -373,7 +375,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.BatteryControl
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error processing request: {ex.Message}");
+                _log.Error($"Error processing request: {ex.Message}");
                 try
                 {
                     context.Response.StatusCode = 500;

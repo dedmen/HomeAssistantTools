@@ -11,7 +11,10 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 using static System.Runtime.InteropServices.JavaScript.JSType;
+using HomeAssistantNetDaemon.apps;
+using HomeAssistantNetDaemon.apps.HassModel.Zyxel;
 
 namespace KPNAPIPoll
 {
@@ -27,10 +30,14 @@ namespace KPNAPIPoll
 
         private CookieContainer cookies = new CookieContainer();
         private readonly IConfiguration _cfg;
+        private readonly ZyxelRouterService? _zyxel;
+        private readonly PrefixedLog _log;
 
-        public KPNRequester(IConfiguration cfg)
+        public KPNRequester(IConfiguration cfg, ZyxelRouterService? zyxel = null, ILogger? logger = null)
         {
             _cfg = cfg;
+            _zyxel = zyxel;
+            _log = new PrefixedLog("[KPN]", logger ?? NullLogger.Instance);
             // Base cookies that are always present
             cookies.Add(new Cookie("mijnkpnapp", "1", "/", domain: "kpn.com"));
             cookies.Add(new Cookie("mijnkpnapp_locale", "en", "/", domain: "kpn.com"));
@@ -42,7 +49,7 @@ namespace KPNAPIPoll
 
         void Log(string message)
         {
-            Console.WriteLine(message);
+            _log.Info(message);
         }
 
         public struct ProductUsage
@@ -102,7 +109,7 @@ namespace KPNAPIPoll
                         {
                             var result = sr.ReadToEnd();//Read logged in webpage
                             // See if it somehow indicates that token expired
-                            Console.WriteLine(result);
+                            requester._log.Error(result);
                         }
                         // {"message":"UNAUTHORIZED_REQUEST","errors":[],"key":null,"code":"INVALID_BEARER_TOKEN","error_code":null}
                         // login again and retry
@@ -110,7 +117,9 @@ namespace KPNAPIPoll
                             exception.Status == WebExceptionStatus.ProtocolError &&
                             ((System.Net.HttpWebResponse)exception.Response).StatusCode == HttpStatusCode.Unauthorized)
                         {
-                            requester.DoLogin();
+                            // Sync context (struct method): block on the login,
+                            // which may include a 2FA SMS wait of up to ~30s.
+                            requester.DoLoginAsync().GetAwaiter().GetResult();
                             return GetUsage(requester, false);
                         }
                         else
@@ -155,7 +164,7 @@ namespace KPNAPIPoll
                         {
                             var result = sr.ReadToEnd();//Read logged in webpage
                             // See if it somehow indicates that token expired
-                            Console.WriteLine(result);
+                            requester._log.Error(result);
                         }
                         throw;
                     }
