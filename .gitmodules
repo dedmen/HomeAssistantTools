@@ -1,0 +1,3 @@
+[submodule "libs/ZyxelRootTools"]
+	path = libs/ZyxelRootTools
+	url = https://github.com/dedmen/ZyxelRootTools

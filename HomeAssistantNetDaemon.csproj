@@ -40,6 +40,15 @@
         <PackageReference Include="System.Reactive" Version="7.0.0" />
         <PackageReference Include="Tmds.MDns" Version="0.9.0" />
     </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="libs\ZyxelRootTools\src\ZyxelRoot\ZyxelRoot.csproj" />
+        <!-- The submodule lives inside the project dir: keep its sources out of
+             this project's default **/*.cs glob (it builds via the reference). -->
+        <Compile Remove="libs\**" />
+        <EmbeddedResource Remove="libs\**" />
+        <None Remove="libs\**" />
+    </ItemGroup>
         
     <ItemGroup>
       <Folder Include="apps\AppModel\" />

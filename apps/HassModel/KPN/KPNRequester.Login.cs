@@ -36,7 +36,7 @@ namespace KPNAPIPoll
         private string authHeader = "";
         private string csrfSessionKey = "";
 
-        public void DoLogin()
+        public async Task DoLoginAsync()
         {
             if (File.Exists(AppTokenCacheFile))
             {
@@ -75,7 +75,7 @@ namespace KPNAPIPoll
                 // Refresh failed, need to do full flow
             }
 
-            GetLoginToken(out var appTokenCode);
+            string appTokenCode = await GetLoginTokenAsync();
             GetNewAppToken(ref appTokenCode);
         }
 
@@ -96,7 +96,7 @@ namespace KPNAPIPoll
             public string challenge_id { get; set; }
         }
 
-        public void GetLoginToken(out string appTokenCode, bool force = false)
+        public async Task<string> GetLoginTokenAsync(bool force = false)
         {
             // cigateway has its own cookie store, the session id we have is only temporary
 
@@ -240,8 +240,15 @@ namespace KPNAPIPoll
                         }
                     }
 
-                    Console.Write("Enter SMS 2FA code: ");
-                    string challengeResponseCode = Console.ReadLine();
+                    // Read the code from the router's SMS inbox. KPN sent it to
+                    // the number behind the router when the challenge was init'ed
+                    // above. Uses the most recent "is je code NNNNN" SMS when it
+                    // is at most 30s old, otherwise waits up to 30s for a new
+                    // one. When nothing fresh arrives the login is failed.
+                    string? challengeResponseCode = await GetTwoFactorCodeFromSmsAsync();
+                    if (challengeResponseCode is null)
+                        throw new InvalidOperationException(
+                            "2FA: no fresh code SMS in the router inbox — login failed");
 
                     // POST https://api.kpn.com/cigateway/v2/login-challenge/sms/validate
                     // {"challenge_id":"1c90e7bb-9165-406e-9c4b-08951ac50ddf","challenge_request":"82f80bde-71c0-4188-ba5d-cf130746f1b1","challenge_response":"48518","remember_device":true}
@@ -335,7 +342,7 @@ namespace KPNAPIPoll
                             var res = JsonSerializer.Deserialize<DynResLoginToken>(result);
 
                             string redirUri = res.redirect_url;
-                            appTokenCode = redirUri.Substring(redirUri.IndexOf("code=") + 5);
+                            string appTokenCode = redirUri.Substring(redirUri.IndexOf("code=") + 5);
                             // {
                             //     "status": "ok",
                             //     "redirect_url": "https://mijn.kpn.com/#/overzicht?&code=7MNvxxgdr"
@@ -346,10 +353,10 @@ namespace KPNAPIPoll
                             if (cooks.Count < 1)
                             {
                                 Log("Login failed, cookie count invalid");
-                                return;
+                                return "";
                             }
 
-                            return;
+                            return appTokenCode;
                         }
                     }
                 }
@@ -367,6 +374,37 @@ namespace KPNAPIPoll
                     //else
                         throw;
                 }
+            }
+
+            throw new InvalidOperationException("login did not complete");
+        }
+
+        /// <summary>
+        /// Reads the KPN 2FA code from the router's SMS inbox (format:
+        /// "Beste klant, voor verificatie in 2 stappen is je code 71354.").
+        /// The most recent "is je code NNNNN" SMS is used when it is at most
+        /// 30 s old, otherwise new inbox messages are polled for up to 30 s.
+        /// Returns null when nothing fresh arrives — the caller fails the
+        /// login.
+        /// </summary>
+        private async Task<string?> GetTwoFactorCodeFromSmsAsync()
+        {
+            if (_zyxel is null)
+            {
+                Log("no router attached — cannot read the 2FA code from the SMS inbox");
+                return null;
+            }
+
+            try
+            {
+                return await _zyxel.WaitForSmsCodeAsync(
+                    maxAge: TimeSpan.FromSeconds(30),
+                    timeout: TimeSpan.FromSeconds(30));
+            }
+            catch (Exception ex)
+            {
+                Log($"2FA SMS read failed: {ex.Message}");
+                return null;
             }
         }
 

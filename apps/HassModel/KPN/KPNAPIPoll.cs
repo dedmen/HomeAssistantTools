@@ -1,4 +1,5 @@
 using HomeAssistantNetDaemon.apps.HassModel.HelloWorld;
+using HomeAssistantNetDaemon.apps.HassModel.Zyxel;
 using KPNAPIPoll;
 using Microsoft.Extensions.Configuration;
 using NetDaemon.Extensions.MqttEntityManager;
@@ -27,7 +28,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.KPN
         private KPNRequester _kr;
         private KPNRequester.ProductEntry _productEntry;
 
-        public KPNAPIPoll(IHaContext ha, IMqttEntityManager entityManager, INetDaemonScheduler scheduler, IConfiguration cfg)
+        public KPNAPIPoll(IHaContext ha, IMqttEntityManager entityManager, INetDaemonScheduler scheduler, IConfiguration cfg, ZyxelRouterService zyxel, ILogger<KPNAPIPoll> logger)
         {
             _ha = ha;
             _entityManager = entityManager;
@@ -37,13 +38,13 @@ namespace HomeAssistantNetDaemon.apps.HassModel.KPN
             Task.Run(InitLoginAsync);
         }
 
-        private void InitLogin()
+        private async Task InitLoginAsync()
         {
             StartSetup();
 
             try
             {
-                _kr.DoLogin();
+                await _kr.DoLoginAsync();
             }
             catch (System.Net.WebException ex) // Resource temporarily unavailable
             {
@@ -51,16 +52,24 @@ namespace HomeAssistantNetDaemon.apps.HassModel.KPN
                 //Thread.Sleep(30000);
 
                 // try again
-                _scheduler.RunIn(TimeSpan.FromMinutes(5), InitLogin);
+                _scheduler.RunIn(TimeSpan.FromMinutes(5), () => _ = InitLoginAsync());
+                return;
+            }
+            catch (System.InvalidOperationException ex) // 2FA code not received
+            {
+                _log.Error(ex.Message);
+
+                // try again
+                _scheduler.RunIn(TimeSpan.FromMinutes(5), () => _ = InitLoginAsync());
                 return;
             }
 
-            InitProductEntry();
+            await InitProductEntryAsync();
             _scheduler.RunEvery(TimeSpan.FromMinutes(10), () =>
             {
                 if (string.IsNullOrEmpty(_productEntry.id))
                 {
-                    InitProductEntry();
+                    _ = InitProductEntryAsync();
                     return;
                 }
 
@@ -68,7 +77,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.KPN
             });
         }
 
-        void InitProductEntry()
+        private async Task InitProductEntryAsync()
         {
             try
             {
@@ -85,12 +94,12 @@ namespace HomeAssistantNetDaemon.apps.HassModel.KPN
                     if (webEx.Response is System.Net.HttpWebResponse resp)
                     {
                         if (resp.StatusCode == HttpStatusCode.Unauthorized)
-                            _kr.DoLogin();
+                            await _kr.DoLoginAsync();
                     }
                 }
 
                 // try again
-                _scheduler.RunIn(TimeSpan.FromMinutes(5), InitProductEntry);
+                _scheduler.RunIn(TimeSpan.FromMinutes(5), () => _ = InitProductEntryAsync());
             }
         }
 
