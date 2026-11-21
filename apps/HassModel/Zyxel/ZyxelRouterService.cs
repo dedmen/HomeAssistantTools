@@ -54,6 +54,8 @@ namespace HomeAssistantNetDaemon.apps.HassModel.Zyxel
         private KickMonitor? _kick;
         private Task? _kickReader;
         private Task? _execution;
+        private bool _modemHangOpen;
+        private Task? _modemResetTask;
         private TaskCompletionSource<bool> _connectedTcs =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private volatile bool _lteEnabled;
@@ -255,6 +257,7 @@ namespace HomeAssistantNetDaemon.apps.HassModel.Zyxel
 
                 _kickReader = Task.Run(async () =>
                 {
+                    _modemHangOpen = false;   // fresh capture: a new hang episode may trigger a reset
                     try
                     {
                         await foreach (KickRecord r in kick.ReadAsync(ct).ConfigureAwait(false))
@@ -274,6 +277,22 @@ namespace HomeAssistantNetDaemon.apps.HassModel.Zyxel
                                     // Not logged: on this modem the rssi value
                                     // oscillates (14/99) every poll, and a kick
                                     // is proven by the mmm.log signature anyway.
+                                    // A completed round trip (anything but the
+                                    // timeout summary) means the module is
+                                    // answering again — the hang episode is over.
+                                    if (r.Text != "timeout")
+                                        _modemHangOpen = false;
+                                    break;
+
+                                case KickRecordKind.ModemHang:
+                                    // The module stopped answering (30 s AT
+                                    // timeout) — hard-reset it once per episode.
+                                    Log($"MODEM HANG: {r.Text}");
+                                    if (!_modemHangOpen)
+                                    {
+                                        _modemHangOpen = true;
+                                        _modemResetTask = Task.Run(ModemHardResetAsync);
+                                    }
                                     break;
 
                                 case KickRecordKind.Notice:
@@ -305,6 +324,14 @@ namespace HomeAssistantNetDaemon.apps.HassModel.Zyxel
 
         private async Task CleanupAsync()
         {
+            // A hard reset in flight must not be abandoned: a module left
+            // powered off by an interrupted PowerOff→PowerOn stays down.
+            if (_modemResetTask is { IsCompleted: false } reset)
+            {
+                try { await reset.WaitAsync(TimeSpan.FromSeconds(90)); }
+                catch (TimeoutException) { _log.Warning("exit: modem hard reset still running"); }
+            }
+
             try
             {
                 if (_kick is { IsRunning: true } kick)
@@ -456,6 +483,49 @@ namespace HomeAssistantNetDaemon.apps.HassModel.Zyxel
                 Log("APN reconnect: data call is back up");
             else
                 _log.Warning("APN reconnect: radio cycled but the data call is not back after 90 s");
+        }
+
+        /// <summary>
+        /// The AT path hung (a 30 s poll timeout — a healthy module answers in
+        /// milliseconds, the vendor client only blocks this long when the
+        /// module stopped answering): hard-reset the module —
+        /// <c>--modem_poweroff</c>, a settle, <c>--nw_radio_state_set 1</c>
+        /// plus state verification. Runs once per hang episode; the next
+        /// successful AT poll closes the episode. A failed power-on means the
+        /// module is fully down and has no user-space power-on — the fallback
+        /// is a router reboot (<c>ZyxelRouterReboot</c>).
+        /// </summary>
+        private async Task ModemHardResetAsync()
+        {
+            try
+            {
+                Log("modem hard reset starting (power off → on)");
+                var power = new ModemPower(ConnectedShell());
+
+                ModemPowerResult off = await power.PowerOffAsync().ConfigureAwait(false);
+                if (!off.Success)
+                {
+                    _log.Error("modem hard reset: power off failed " +
+                        $"({(off.TimedOut ? "timed out — the module is not answering at all" : FirstLine(off.Output))}) — " +
+                        "recovery needs a router reboot");
+                    return;
+                }
+                Log("modem hard reset: module powered off");
+
+                await Task.Delay(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+
+                ModemPowerResult on = await power.PowerOnAsync().ConfigureAwait(false);
+                if (on.Success)
+                    Log("modem hard reset done — radio back ON, waiting for the data call");
+                else
+                    _log.Error("modem hard reset: power on failed " +
+                        $"({(on.TimedOut ? "timed out — no live module-side MIPC peer to power on" : FirstLine(on.Output))}) — " +
+                        "the module is fully down; recovery needs a router reboot");
+            }
+            catch (Exception ex)
+            {
+                _log.Error($"modem hard reset failed: {ex.Message}");
+            }
         }
 
         // ------------------------------------------------------------------- reboot
