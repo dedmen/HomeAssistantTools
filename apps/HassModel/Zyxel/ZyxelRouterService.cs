@@ -754,6 +754,8 @@ namespace HomeAssistantNetDaemon.apps.HassModel.Zyxel
                 settings.RootPort = rootPort;
             if (z["WebUsername"] is { Length: > 0 } wu) settings.WebUsername = wu;
             if (z["WebPassword"] is { Length: > 0 } wp) settings.WebPassword = wp;
+            if (z["RootUsername"] is { Length: > 0 } ru) settings.RootUsername = ru;
+            if (z["RootPassword"] is { Length: > 0 } rp) settings.RootPassword = rp;
 
             var payloadSection = z.GetSection("DalPayload");
             if (payloadSection.GetChildren().Any())
